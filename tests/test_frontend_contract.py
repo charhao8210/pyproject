@@ -273,3 +273,12 @@ def test_variables_keep_first_seen_order_and_input_values_sit_above_the_view() -
     assert "function renderInputs" in script
     assert "inputNames(step)" in script
     assert ".variable-zones.is-split" in stylesheet
+
+
+def test_variables_show_old_to_new_values_and_tint_changed_cells() -> None:
+    script = Path("app/static/app.js").read_text(encoding="utf-8")
+    style = Path("app/static/style.css").read_text(encoding="utf-8")
+
+    assert 'textSpan("->", "change-arrow")' in script
+    assert "step.usage?.next" in script and "step.usage?.cells" in script
+    assert "is-changed-cell" in script and ".table-cell.is-changed-cell" in style

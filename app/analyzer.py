@@ -781,6 +781,9 @@ SET_CLASSES = frozenset({"set", "multiset", "unordered_set"})
 class _SetItems(list):
     """Decoded members of a set: a list for every view, but never a table of rows."""
 
+    # `usage._changed_cells` marks new members, not positions, of an unordered container.
+    unordered = True
+
 
 def _decode_value(
     value: Any,

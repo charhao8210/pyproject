@@ -1053,6 +1053,24 @@ h2 {
     color: var(--write);
 }
 
+/* `7 -> 10` on a single value the last line changed; the old value is the faint one. */
+.change-before {
+    color: var(--pencil-faint);
+}
+
+.change-arrow {
+    margin: 0 6px;
+    color: var(--write);
+    font-weight: 700;
+}
+
+/* The entries of a container the last line changed get a tinted background. */
+.array-cell.is-changed-cell,
+.dict-row.is-changed-cell,
+.table-cell.is-changed-cell {
+    background: color-mix(in srgb, var(--write) 24%, transparent);
+}
+
 .changed-tag {
     margin-right: 6px;
     color: var(--write);

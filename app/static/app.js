@@ -850,6 +850,9 @@ function renderInputs(step, visualization) {
 function renderVariables(step, visualization) {
     const onLine = new Set(step.usage?.line || []);
     const changed = new Set(step.usage?.changed || []);
+    // What the highlighted line is about to do: the value it will leave, the entries it will write.
+    const upcoming = step.usage?.next || {};
+    const upcomingCells = step.usage?.cells || {};
     const hidden = new Set([...(visualization?.uses || []).map(String), ...inputNames(step)]);
     const entries = variableEntries(step.locals || {}, step.globals || {}, hidden);
     elements.variables.replaceChildren();
@@ -888,7 +891,14 @@ function renderVariables(step, visualization) {
         );
         const content = document.createElement("div");
         content.className = "value-view";
-        content.append(renderValue(value, 0));
+        if (isScalar && Object.hasOwn(upcoming, name)) {
+            // On the line that changes it: `7 -> 10`, the value now and the one it will have.
+            const before = renderValue(value, 0);
+            before.classList.add("change-before");
+            content.append(before, textSpan("->", "change-arrow"), renderValue(upcoming[name], 0));
+        } else {
+            content.append(renderValue(value, 0, upcomingCells[name]));
+        }
         if (isScalar) {
             card.append(nameNode, content, type);
             scalars.append(card);
@@ -958,8 +968,12 @@ function variableEntries(locals, globals, hidden) {
     ].filter(([name, value]) => !hidden.has(name) && !isNoise(name, value));
 }
 
-function renderValue(value, depth) {
+// `changes` (`step.usage.cells[name]`) marks the entries the highlighted line will change: `items` are
+// list or dict positions, `cells` are [row, column] of a table.
+function renderValue(value, depth, changes = null) {
     if (!value) return textSpan("—", "primitive none");
+    const changedItems = new Set(changes?.items || []);
+    const changedTableCells = new Set((changes?.cells || []).map(([row, column]) => `${row}:${column}`));
     if (value.type === "reference") {
         return textSpan(`↪ ${objectLabel(value.object_id)}`, "reference-value");
     }
@@ -974,7 +988,7 @@ function renderValue(value, depth) {
     }
     if (value.type === "none") return textSpan("None", "primitive none");
 
-    if (depth === 0 && isTableValue(value)) return renderTableValue(value);
+    if (depth === 0 && isTableValue(value)) return renderTableValue(value, changedTableCells);
     if (["list", "tuple", "set", "frozenset"].includes(value.type)) {
         // A pair inside a list reads best as `(1, 2)`, not as a nested row of cells.
         const flatTuple = value.type === "tuple" && (value.items || []).every(isScalarValue);
@@ -987,6 +1001,7 @@ function renderValue(value, depth) {
         items.forEach((item, index) => {
             const cell = document.createElement("div");
             cell.className = "array-cell";
+            if (changedItems.has(index)) cell.classList.add("is-changed-cell");
             const indexNode = document.createElement("div");
             indexNode.className = "array-index";
             indexNode.textContent = value.type === "list" || value.type === "tuple" ? index : "item";
@@ -1010,9 +1025,10 @@ function renderValue(value, depth) {
         if (depth >= 2) return textSpan(compactValue(value), "primitive");
         const dict = document.createElement("div");
         dict.className = "dict-view";
-        (value.entries || []).forEach((entry) => {
+        (value.entries || []).forEach((entry, position) => {
             const row = document.createElement("div");
             row.className = "dict-row";
+            if (changedItems.has(position)) row.classList.add("is-changed-cell");
             const key = document.createElement("div");
             key.className = "dict-key";
             key.textContent = compactValue(entry.key);
@@ -1052,7 +1068,7 @@ function isBlankCell(item) {
     return [0, "", "\0", false, null, undefined].includes(item?.value) && item?.type !== "reference";
 }
 
-function renderTableValue(value) {
+function renderTableValue(value, changedCells = new Set()) {
     const rows = value.items.map((row) => (row.type === "str"
         ? [...row.value].map((character) => ({type: "str", value: character}))
         : row.items || []));
@@ -1085,7 +1101,9 @@ function renderTableValue(value) {
         for (let column = 0; column < width; column++) {
             const item = rows[row]?.[column];
             const text = !item || item.value === "\0" ? "" : compactValue(item);
-            table.append(textSpan(text, "table-cell"));
+            const cell = textSpan(text, "table-cell");
+            if (changedCells.has(`${row}:${column}`)) cell.classList.add("is-changed-cell");
+            table.append(cell);
         }
     }
     wrapper.append(table);

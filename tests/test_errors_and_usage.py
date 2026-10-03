@@ -75,7 +75,7 @@ def test_usage_marks_names_on_the_line_and_values_changed_by_the_previous_line()
     usage = [(step["line"], step["usage"]) for step in result["steps"]]
     line_two = next(entry for line, entry in usage if line == 2)
     line_three = next(entry for line, entry in usage if line == 3)
-    assert line_two == {"line": ["a"], "changed": ["a"]}
+    assert line_two == {"line": ["a"], "changed": ["a"], "next": {}, "cells": {}}
     assert set(line_three["line"]) == {"a", "b"}
     assert line_three["changed"] == ["b"]
 

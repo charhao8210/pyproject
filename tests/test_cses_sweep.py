@@ -277,3 +277,27 @@ def test_an_alias_writes_only_what_it_was_bound_to() -> None:
     assert _alias_targets(code, "p") == {"a"}
     # A function can return a reference to anything.
     assert _alias_targets(code, "r") is None
+
+
+def test_each_line_carries_the_values_and_cells_it_will_change() -> None:
+    result = run_debugger(
+        "x = 7\n"
+        "a = [0, 0, 0]\n"
+        "g = [[0, 0], [0, 0]]\n"
+        "x += 3\n"
+        "a[1] = 5\n"
+        "g[1][0] = 2\n"
+        "s = {1}\n"
+        "s.add(4)\n"
+        "done = 1\n"
+    )
+    usage = {}
+    for step in result["steps"]:
+        usage.setdefault(step["line"], step["usage"])
+
+    # Each effect belongs to the step showing the line that makes it.
+    assert (usage[4]["next"]["x"]["type"], usage[4]["next"]["x"]["value"]) == ("int", 10)
+    assert usage[5]["cells"]["a"] == {"items": [1], "cells": []}
+    assert usage[6]["cells"]["g"] == {"items": [1], "cells": [[1, 0]]}
+    assert usage[8]["cells"]["s"]["items"] == [1] and "s" not in usage[8]["next"]
+    assert usage[5]["next"] == {} and usage[9]["cells"] == {}
