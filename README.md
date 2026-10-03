@@ -1,5 +1,7 @@
 # Code Visual Debugger
 
+English | [繁體中文](README.zh-TW.md)
+
 A clean, local web app for exploring how Python and C++ programs execute. Choose a language, paste a program, provide optional standard input, run it once, and browse immutable execution snapshots with forward/backward controls. Each snapshot includes the current source line, important local variables, object identity, call stack, cumulative stdout, and exception details.
 
 The debugger combines generic execution tracing with heuristic algorithm detection. It can switch between grid, draggable graph, array-bar, recursive-call, and generic execution views.
