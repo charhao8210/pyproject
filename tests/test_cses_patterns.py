@@ -66,7 +66,9 @@ def test_bfs_graph_view_draws_the_queue_and_distances() -> None:
     view = views[-1]
     assert view["frontier"]["name"] == "q"
     assert view["labels"]["name"] == "dis"
-    assert {"q", "dis", "vis", "graph"} <= set(view["uses"])
+    assert {"q", "vis", "graph"} <= set(view["uses"])
+    # Per-vertex labels (`dis`) are drawn beside the vertices but stay listed in Variables.
+    assert "dis" not in view["uses"]
 
 
 @requires_cpp

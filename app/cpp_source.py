@@ -157,12 +157,33 @@ class SourceModel:
     # Names declared by a statement that starts on each line. A stop on that line comes
     # before the declaration runs, so GDB would show uninitialized memory for them.
     line_declarations: dict[int, frozenset[str]] = field(default_factory=dict)
+    # (first line, last line, name) of each lambda body assigned to a variable
+    # (`auto dfs = [&](...) {...}`); GDB only calls its frame `operator()`.
+    lambdas: tuple[tuple[int, int, str], ...] = ()
+    # Each variable's type as the source declares it (`_declared_types`).
+    declared_types: dict[tuple[int, str], tuple[tuple[int, str], ...]] = field(default_factory=dict)
+
+    def declared_type(self, name: str, line: int, is_global: bool = False) -> str | None:
+        """The type `name` was declared with, for a stop on `line`: the last declaration in
+        its function before that line (a loop's `int x` and a later `double x` differ)."""
+        block = self.block_for_line(line)
+        key = (-1 if is_global or block is None else block, name)
+        entries = self.declared_types.get(key, ())
+        if not entries:
+            return None
+        before = [type_text for declared, type_text in entries if declared <= line]
+        return before[-1] if before else entries[0][1]
 
     def block_for_line(self, line: int) -> int | None:
         for index, (start, end) in enumerate(self.function_blocks):
             if start <= line <= end:
                 return index
         return None
+
+    def lambda_name(self, line: int) -> str:
+        """The variable holding the innermost lambda whose body contains `line`."""
+        around = [(end - start, name) for start, end, name in self.lambdas if start <= line <= end]
+        return min(around)[1] if around else "lambda"
 
 
 def analyze_source(source: str) -> SourceModel:
@@ -184,7 +205,36 @@ def analyze_source(source: str) -> SourceModel:
         line_declarations=_line_declarations(text, index),
         function_blocks=tuple(index.top_level_blocks()),
         raw_casts=raw_casts,
+        lambdas=tuple(_named_lambdas(text, index)),
+        declared_types=_declared_types(text, index),
     )
+
+
+_NAMED_LAMBDA = re.compile(
+    r"\b(?:auto|function\s*<[^;={}]*>)\s*&{0,2}\s*([A-Za-z_]\w*)\s*=\s*\[[^\[\]]*\]"
+)
+
+
+def _named_lambdas(text: str, index: _TextIndex) -> list[tuple[int, int, str]]:
+    """`auto dfs = [&](auto self, int v) -> void { ... }` → (body's first line, last line, "dfs")."""
+    lambdas = []
+    for match in _NAMED_LAMBDA.finditer(text):
+        # The body is the first brace after the parameter list and trailing return type.
+        depth = 0
+        for position in range(match.end(), len(text)):
+            character = text[position]
+            if character == "(":
+                depth += 1
+            elif character == ")":
+                depth -= 1
+            elif character == ";" and depth == 0:
+                break
+            elif character == "{" and depth == 0:
+                closing = index.closing_brace(position)
+                if closing is not None:
+                    lambdas.append((index.line_of(position), index.line_of(closing), match.group(1)))
+                break
+    return lambdas
 
 
 def strip_code(source: str) -> str:
@@ -305,12 +355,27 @@ def classify_type(
 
 
 def _node_value_type(type_text: str) -> bool:
-    """A builtin type, or a pair of them, that GDB can read through a pointer cast."""
+    """A builtin type, a `std::array` of one (`map<array<int,4>,bool>`), or a pair of builtin
+    types, that GDB can read through a pointer cast.
+
+    A map key is cast as one type, and GDB cannot name a pair holding an array
+    (`std::pair<long long, std::array<long long, 2ul> >`), so pairs stay builtin-only.
+    """
     plain = CAST_SAFE_TYPES | {"bool"}
     if type_text.startswith("pair<"):
         parts = [_normalize_type(part) for part in template_arguments(type_text)]
         return len(parts) == 2 and all(part in plain for part in parts)
-    return type_text in plain
+    return type_text in plain or fixed_array_type(type_text) is not None
+
+
+def fixed_array_type(type_text: str) -> tuple[str, int] | None:
+    """`array<int,4>` → `("int", 4)` when the element is a builtin type and the size a literal."""
+    if not type_text.startswith("array<"):
+        return None
+    arguments = [_normalize_type(argument) for argument in template_arguments(type_text)]
+    if len(arguments) != 2 or arguments[0] not in CAST_SAFE_TYPES | {"bool"} or not arguments[1].isdigit():
+        return None
+    return arguments[0], int(arguments[1])
 
 
 def expand_aliases(type_text: str, aliases: dict[str, str]) -> str:
@@ -786,6 +851,58 @@ def _line_declarations(text: str, index: _TextIndex) -> dict[int, frozenset[str]
             name.strip() for name in match.group("names").split(",") if name.strip()
         )
     return {line: frozenset(names) for line, names in declared.items()}
+
+
+_PARAMETER = re.compile(
+    r"(?<=,)\s*"
+    r"(?:(?:const|unsigned|signed)\s+)*"
+    r"(?P<type>long\s+long|long\s+double|[A-Za-z_][\w:]*(?:\s*<[^;(){}]*>)?)"
+    r"(?:\s*[&*]+\s*|\s+)"
+    r"(?P<name>[A-Za-z_]\w*)\s*(?=[,)=\[])"
+)
+_STORAGE_WORDS = re.compile(r"\b(?:static|register|constexpr|inline|extern)\s+")
+
+
+def _declared_types(text: str, index: _TextIndex) -> dict[tuple[int, str], tuple[tuple[int, str], ...]]:
+    """Every declaration's type as written: (function block, or -1 for globals; name) →
+    ((line, type), ...) in source order. `long long big` → `long long`, `string s` → `string`."""
+    blocks = index.top_level_blocks()
+
+    def block_of(line: int) -> int:
+        return next((number for number, (start, end) in enumerate(blocks) if start <= line <= end), -1)
+
+    found: dict[tuple[int, str], list[tuple[int, str]]] = {}
+
+    def record(position: int, name: str, type_text: str) -> None:
+        line = index.line_of(position)
+        found.setdefault((block_of(line), name), []).append((line, type_text))
+
+    def spelled(match: re.Match[str]) -> str:
+        written = _STORAGE_WORDS.sub("", text[match.start() : match.start("name")]).strip()
+        return re.sub(r"\s*([&*])\s*", r"\1", re.sub(r"\s+", " ", written))
+
+    for match in _DECLARATION.finditer(text):
+        if match.group("type") in _NOT_TYPES or match.group("name") in _NOT_TYPES:
+            continue
+        type_text = spelled(match)
+        record(match.start("name"), match.group("name"), type_text)
+        # `int a, b = 2;` shares the type (without the first one's `*` or `&`).
+        separator = _next_top_level_separator(text, match.end("name"))
+        while separator is not None and text[separator] == "," and index.paren_depth[match.start("name")] == 0:
+            following = re.match(r"\s*([&*]*)\s*([A-Za-z_]\w*)", text[separator + 1 :])
+            if not following:
+                break
+            record(separator + 1 + following.start(2), following.group(2), type_text.rstrip("&*") + following.group(1))
+            separator = _next_top_level_separator(text, separator + 1 + following.end())
+    # Parameters after the first: `void dfs(int u, int parent)`.
+    for match in _PARAMETER.finditer(text):
+        if index.paren_depth[match.start("name")] > 0 and match.group("type") not in _NOT_TYPES:
+            record(match.start("name"), match.group("name"), spelled(match))
+    for match in _STRUCTURED_BINDING.finditer(text):
+        for name in match.group("names").split(","):
+            if name.strip():
+                record(match.start(), name.strip(), "auto")
+    return {key: tuple(sorted(entries)) for key, entries in found.items()}
 
 
 def _first_uses(text: str, index: _TextIndex) -> dict[int, dict[str, int]]:

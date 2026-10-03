@@ -41,6 +41,18 @@ async def index(request: Request) -> HTMLResponse:
     return response
 
 
+@app.get("/help", response_class=HTMLResponse)
+async def help_page(request: Request) -> HTMLResponse:
+    """How to use the debugger, and every term it shows (the list lives in static/terms.js)."""
+    response = templates.TemplateResponse(
+        request=request,
+        name="help.html",
+        context={"asset_version": _asset_version()},
+    )
+    response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
 JS_SAFE_INTEGER = 2**53 - 1
 
 
@@ -55,11 +67,36 @@ def _mark_large_integers(value: object, seen: set[int] | None = None) -> None:
         number = value.get("value")
         if isinstance(number, int) and not isinstance(number, bool) and abs(number) > JS_SAFE_INTEGER:
             value["text"] = str(number)
-        children = value.values()
+        # View models hold bare numbers (`values`, grid `rows`, per-vertex `labels.values`):
+        # they get an exact twin, `values_text`, holding every number as text.
+        for key, child in list(value.items()):
+            if isinstance(child, (list, dict)) and not key.endswith("_text"):
+                mirror, large = _exact_text(child)
+                if large:
+                    value[f"{key}_text"] = mirror
+        children = list(value.values())
     else:
         children = value
     for child in children:
         _mark_large_integers(child, seen)
+
+
+def _exact_text(value: object, depth: int = 0) -> tuple[object, bool]:
+    """`[1, 5e17+3]` → `(["1", "500000000000000003"], True)`: bare numbers as exact text, and
+    whether any is beyond 2^53. Serialized values (dicts) are left alone: they get `text`."""
+    if isinstance(value, bool):
+        return None, False
+    if isinstance(value, int):
+        return str(value), abs(value) > JS_SAFE_INTEGER
+    if depth >= 2:
+        return None, False
+    if isinstance(value, list):
+        mirrored = [_exact_text(item, depth + 1) for item in value]
+        return [text for text, _ in mirrored], any(large for _, large in mirrored)
+    if isinstance(value, dict) and "type" not in value:
+        mirrored = {key: _exact_text(item, depth + 1) for key, item in value.items()}
+        return {key: text for key, (text, _) in mirrored.items()}, any(large for _, large in mirrored.values())
+    return None, False
 
 
 @app.post("/api/debug", response_model=DebugResponse)

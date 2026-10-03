@@ -936,6 +936,24 @@ h2 {
     border-left: 3px solid transparent;
 }
 
+/* C++ rows read like declarations: type, name, value. */
+.variable-zones.is-cpp.is-split .scalar-zone,
+.variable-zones.is-cpp:not(.is-split) .scalar-row {
+    grid-template-columns: max-content max-content minmax(0, 1fr);
+}
+
+.variable-zones.is-cpp .scalar-row .type-tag {
+    font-family: var(--mono);
+    font-size: 14px;
+}
+
+/* No declaration found: the kind of value (`integer`), in italics so it does not pass for a type. */
+.variable-zones.is-cpp .scalar-row .type-tag.is-kind {
+    font-family: var(--sans);
+    font-size: 12px;
+    font-style: italic;
+}
+
 .scalar-row .variable-label {
     justify-self: start;
     font-family: var(--mono);
@@ -1069,10 +1087,14 @@ h2 {
     white-space: pre;
 }
 
+/* `->` is one symbol: `.value-view` breaks anywhere, which split it into `-` and `>` on a narrow row. */
 .change-arrow {
+    display: inline-block;
     margin: 0 6px;
     color: var(--write);
     font-weight: 700;
+    white-space: nowrap;
+    overflow-wrap: normal;
 }
 
 /* The entries of a container the last line changed get a tinted background. */
@@ -1080,6 +1102,13 @@ h2 {
 .dict-row.is-changed-cell,
 .table-cell.is-changed-cell {
     background: color-mix(in srgb, var(--write) 24%, transparent);
+}
+
+/* An entry the highlighted line is about to push: drawn after the real ones, light blue. */
+.array-cell.is-new-cell {
+    background: color-mix(in srgb, var(--ink) 22%, transparent);
+    outline: 1.5px dashed var(--ink);
+    outline-offset: -1.5px;
 }
 
 .changed-tag {
@@ -1307,6 +1336,23 @@ h2 {
     font-size: 13px;
 }
 
+/* A grid's coordinates and queue sit on their own line under its size and legend. */
+.algorithm-meta:has(.grid-readouts) {
+    flex-wrap: wrap;
+}
+
+.grid-readouts {
+    flex-basis: 100%;
+    justify-content: flex-start;
+}
+
+/* An index (`i = 70`) into the part of a long list that was not read. */
+.beyond-note {
+    display: block;
+    margin-top: 4px;
+    color: var(--write);
+}
+
 .algorithm-legend {
     display: flex;
     flex-wrap: wrap;
@@ -1344,8 +1390,100 @@ h2 {
 .legend-swatch.frontier { border: 1.5px dashed var(--pencil); }
 .legend-swatch.checking { height: 4px; border: 0; background: var(--highlighter); }
 .legend-swatch.written { border: 2px solid var(--write); }
+.legend-swatch.added { border: 2px solid var(--ink); background: color-mix(in srgb, var(--ink) 22%, transparent); }
 .legend-swatch.on-stack { border: 1.5px solid var(--pencil); }
 .legend-swatch.returned { opacity: 0.45; }
+.legend-swatch.reading { border: 2px dashed var(--highlighter); }
+
+/* ---------- Segment tree ---------- */
+
+.segment-tree-svg {
+    display: block;
+    margin: 0 auto;
+}
+
+.segment-edge {
+    stroke: var(--rule);
+    stroke-width: 1.5;
+}
+
+.segment-edge.on-stack {
+    stroke: var(--pencil-muted);
+    stroke-width: 2.5;
+}
+
+.segment-node rect,
+.segment-base rect {
+    fill: var(--sheet-raised);
+    stroke: var(--pencil-faint);
+    stroke-width: 1;
+}
+
+.segment-base rect {
+    fill: var(--sheet);
+    stroke-dasharray: 3 2;
+}
+
+.segment-node.on-stack rect {
+    stroke: var(--pencil);
+    stroke-width: 2;
+}
+
+.segment-node.current rect {
+    fill: var(--highlighter);
+    stroke: var(--pencil);
+    stroke-width: 2;
+}
+
+/* Read by the line about to run (`tree[id*2] >= v`): a dashed highlighter outline. */
+.segment-node.reading rect {
+    stroke: var(--highlighter);
+    stroke-width: 2.5;
+    stroke-dasharray: 5 3;
+}
+
+.segment-node.written rect {
+    stroke: var(--write);
+    stroke-width: 3;
+    stroke-dasharray: none;
+}
+
+.segment-value,
+.segment-range,
+.segment-base-label {
+    font-family: var(--mono);
+    text-anchor: middle;
+}
+
+.segment-value {
+    fill: var(--pencil);
+    font-size: 13px;
+    font-weight: 700;
+}
+
+.segment-range {
+    fill: var(--pencil-faint);
+    font-size: 11px;
+}
+
+.segment-base-label {
+    fill: var(--pencil-muted);
+    font-size: 12px;
+    text-anchor: start;
+}
+
+.segment-node.current .segment-value,
+.segment-node.current .segment-range {
+    fill: var(--on-highlighter);
+}
+
+.segment-node.written .segment-value {
+    fill: var(--write);
+}
+
+.segment-node.current.written .segment-value {
+    fill: var(--on-highlighter);
+}
 
 /* The tree scrolls sideways; its summary and legend stay pinned to the panel's left edge. */
 .algorithm-meta.is-sticky {
@@ -1373,6 +1511,18 @@ h2 {
 
 .array-column.written .array-value {
     color: var(--write);
+    font-weight: 700;
+}
+
+/* An entry the highlighted line pushed: blue on that step only. */
+.array-column.added .array-bar {
+    border: 2px solid var(--ink);
+    border-bottom: 0;
+    background: color-mix(in srgb, var(--ink) 30%, transparent);
+}
+
+.array-column.added .array-value {
+    color: var(--ink);
     font-weight: 700;
 }
 .legend-swatch.active { border-color: var(--pencil); background: var(--highlighter); }
@@ -1484,6 +1634,52 @@ h2 {
     background: var(--bar-fill);
 }
 
+/* Bars stand on a zero line: positive ones rise from it, negative ones hang below it. */
+.array-plot {
+    position: relative;
+    width: 100%;
+}
+
+.array-plot::after {
+    position: absolute;
+    top: var(--zero);
+    right: -4px;
+    left: -4px;
+    border-top: 1px solid var(--pencil-faint);
+    content: "";
+}
+
+.array-plot .array-bar {
+    position: absolute;
+    left: 0;
+    min-height: 0;
+}
+
+.array-plot .array-value {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    white-space: nowrap;
+}
+
+/* Labels wider than a column are read bottom to top instead of overlapping. */
+.vertical-values .array-plot .array-value {
+    transform: translateX(-50%) rotate(180deg);
+    writing-mode: vertical-rl;
+}
+
+.array-column.negative .array-bar {
+    border-top: 0;
+    border-bottom: 1px solid var(--pencil-muted);
+    border-radius: 0 0 2px 2px;
+}
+
+/* An "infinity" placeholder (INF = 1e9): a dashed stub labelled ∞, outside the scale. */
+.array-column.infinite .array-bar {
+    border-style: dashed;
+    background: transparent;
+}
+
 .array-column.compare .array-bar {
     border-color: var(--pencil);
     background: var(--bar-strong);
@@ -1539,6 +1735,15 @@ h2 {
     border-radius: 2px;
     color: var(--on-highlighter);
     background: var(--highlighter);
+}
+
+/* An input value on the line that reads it: shown already, tinted blue like a new variable. */
+.algorithm-inputs .algorithm-readout.is-new {
+    padding: 0 4px;
+    border-radius: 2px;
+    color: var(--pencil);
+    background: color-mix(in srgb, var(--ink) 30%, transparent);
+    box-shadow: inset 0 0 0 1.5px var(--ink);
 }
 
 .array-column .array-index,
@@ -1645,6 +1850,13 @@ h2 {
 
 .cells-item.outside-bound {
     opacity: 0.3;
+}
+
+.cells-item.added .cells-value {
+    border: 2px solid var(--ink);
+    background: color-mix(in srgb, var(--ink) 22%, transparent);
+    color: var(--ink);
+    font-weight: 700;
 }
 
 /* ---------- Recursion tree ---------- */
@@ -1815,6 +2027,7 @@ h2 {
 }
 
 .algorithm-graph-edge {
+    fill: none;
     stroke: var(--pencil-muted);
     stroke-width: 1.5;
 }
@@ -1869,6 +2082,26 @@ h2 {
 
 .algorithm-graph-node.current text {
     fill: var(--on-highlighter);
+}
+
+/* An answer path being built (`route`): thick blue edges and blue-rimmed vertices. */
+.algorithm-graph-edge.on-route {
+    stroke: var(--ink);
+    stroke-width: 4;
+}
+
+.algorithm-graph-node.on-route > circle:not(.queue-ring):not(.reading-ring) {
+    stroke: var(--ink);
+    stroke-width: 3;
+}
+
+.legend-swatch.route { height: 4px; border: 0; background: var(--ink); }
+
+/* A vertex whose entry the highlighted line reads (`dis[n]`): a yellow ring outside the rest. */
+.algorithm-graph-node .reading-ring {
+    fill: none;
+    stroke: var(--highlighter);
+    stroke-width: 3;
 }
 
 /* Vertices waiting in the BFS queue / DFS stack: a dashed ring, as in the grid's frontier. */
@@ -2063,5 +2296,105 @@ kbd {
     .source-line.current .line-text::before,
     .status-pill.running .status-dot {
         animation: none;
+    }
+}
+
+/* ---------- Hover explanations and the help page ---------- */
+
+/* The header's 說明 (help) link looks like the buttons beside it. */
+a.button {
+    display: inline-flex;
+    align-items: center;
+    color: inherit;
+    text-decoration: none;
+}
+
+[data-term] {
+    cursor: help;
+}
+
+/* What a word means, under whatever the pointer rests on (`data-term`, terms.js). */
+.hover-tip {
+    position: fixed;
+    z-index: 1000;
+    max-width: 320px;
+    padding: 8px 10px;
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    color: var(--pencil);
+    background: var(--sheet-raised);
+    box-shadow: 0 6px 18px rgb(0 0 0 / 0.25);
+    font-family: var(--sans);
+    font-size: 13px;
+    font-style: normal;
+    font-weight: 400;
+    line-height: 1.5;
+    pointer-events: none;
+    white-space: normal;
+}
+
+.help-page {
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 32px 16px 64px;
+}
+
+.help-page h1 {
+    margin: 8px 0 12px;
+    font-size: 28px;
+}
+
+.help-page h2 {
+    margin: 36px 0 12px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--rule-faint);
+    font-size: 20px;
+}
+
+.help-page h3 {
+    margin: 24px 0 8px;
+    color: var(--pencil-muted);
+    font-size: 15px;
+}
+
+.help-page li {
+    margin: 6px 0;
+}
+
+.help-page a {
+    color: var(--ink);
+}
+
+.help-page code {
+    font-family: var(--mono);
+}
+
+.help-lead {
+    color: var(--pencil-muted);
+}
+
+.help-terms {
+    display: grid;
+    grid-template-columns: minmax(120px, max-content) 1fr;
+    gap: 8px 16px;
+    margin: 0;
+}
+
+.help-terms dt {
+    font-family: var(--mono);
+    font-weight: 700;
+}
+
+.help-terms dd {
+    margin: 0;
+}
+
+@media (max-width: 560px) {
+    .help-terms {
+        grid-template-columns: 1fr;
+    }
+
+    .help-terms dd {
+        margin-bottom: 8px;
     }
 }

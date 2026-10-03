@@ -376,7 +376,7 @@ int main() {
     assert result["algorithm"]["name"] == "Depth-first search · recursive"
     assert result["steps"][-1]["stdout"] == "3\n"
     in_dfs = [step for step in result["steps"] if step["function"] == "dfs"]
-    assert in_dfs and in_dfs[-1]["globals"]["n"] == {"type": "int", "value": 4}
+    assert in_dfs and in_dfs[-1]["globals"]["n"] == {"type": "int", "value": 4, "c_type": "int"}
     graph = [step["visualization"] for step in result["steps"] if step["visualization"].get("ready")][-1]
     assert set(graph["nodes"]) == {"1", "2", "3", "4"}
     assert set(graph["visited"]) == {"1", "2", "3"}
@@ -447,7 +447,7 @@ int main() {
 
     assert result["status"] == "completed"
     final = result["steps"][-1]
-    assert final["locals"]["done"] == {"type": "int", "value": 7}
+    assert final["locals"]["done"] == {"type": "int", "value": 7, "c_type": "int"}
     assert _plain(final["globals"]["grid"]) == ["..#..", "", ""]
     dp = final["globals"]["dp"]
     assert dp["truncated"] is True and len(dp["items"]) == 30

@@ -305,3 +305,29 @@ def test_large_integers_render_from_their_exact_text() -> None:
     script = Path("app/static/app.js").read_text(encoding="utf-8")
 
     assert "function numberText(" in script and "value.text ?? String(value.value)" in script
+
+
+def test_segment_trees_have_their_own_renderer() -> None:
+    script = Path("app/static/app.js").read_text(encoding="utf-8")
+    style = Path("app/static/style.css").read_text(encoding="utf-8")
+
+    assert "function renderSegmentTreeAlgorithm(" in script
+    assert "segment_tree: renderSegmentTreeAlgorithm" in script and 'segment_tree: "Segment tree"' in script
+    assert ".segment-node.current rect" in style and ".segment-node.reading rect" in style
+
+
+def test_help_page_and_hover_terms() -> None:
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    client = TestClient(app)
+    page = client.get("/help")
+    assert page.status_code == 200 and "使用說明" in page.text and "terms.js" in page.text
+    assert 'href="/help"' in client.get("/").text
+    terms = Path("app/static/terms.js").read_text(encoding="utf-8")
+    script = Path("app/static/app.js").read_text(encoding="utf-8")
+    # Every legend label the views draw has an explanation.
+    for label in ("Visited", "Frontier", "Current", "Reading", "Written", "New", "Blocked", "Edge being checked", "Returned"):
+        assert f'term: "{label}"' in terms
+    assert "item.dataset.term = label" in script and "DebuggerTerms" in script

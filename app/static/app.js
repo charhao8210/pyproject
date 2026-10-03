@@ -61,6 +61,7 @@ const RENDERER_LABELS = {
     cells: "Cells",
     graph: "Graph",
     dsu: "Union-find forest",
+    segment_tree: "Segment tree",
     recursion_tree: "Recursion tree",
     call_tree: "Call chain",
     execution: "Current line",
@@ -209,6 +210,36 @@ setupPanelToggles();
 state.drafts.python = elements.editor.value;
 state.stdinDrafts.python = elements.stdinEditor.value;
 restoreDrafts();
+
+// Hovering (or focusing) anything with `data-term` shows what that word means (terms.js).
+const hoverTip = document.createElement("div");
+hoverTip.className = "hover-tip";
+hoverTip.setAttribute("role", "tooltip");
+hoverTip.hidden = true;
+document.body.append(hoverTip);
+
+function showTermTip(event) {
+    const target = event.target.closest?.("[data-term]");
+    const tip = target && window.DebuggerTerms?.lookup(target.dataset.term);
+    if (!tip) {
+        hoverTip.hidden = true;
+        return;
+    }
+    hoverTip.textContent = tip;
+    hoverTip.hidden = false;
+    const anchorBox = target.getBoundingClientRect();
+    const width = hoverTip.offsetWidth;
+    const height = hoverTip.offsetHeight;
+    const left = Math.min(Math.max(8, anchorBox.left), window.innerWidth - width - 8);
+    const below = anchorBox.bottom + 6;
+    const top = below + height > window.innerHeight - 8 ? anchorBox.top - height - 6 : below;
+    hoverTip.style.left = `${left}px`;
+    hoverTip.style.top = `${Math.max(8, top)}px`;
+}
+
+document.addEventListener("mouseover", showTermTip);
+document.addEventListener("focusin", showTermTip);
+document.addEventListener("scroll", () => { hoverTip.hidden = true; }, true);
 
 // The code and stdin of both languages, and the chosen language, survive a page reload.
 function saveDrafts() {
@@ -753,6 +784,7 @@ function renderStep() {
     elements.functionName.textContent = step.function;
     elements.stepLabel.textContent = `Step ${state.currentStep + 1} / ${state.result.steps.length}`;
     elements.eventLabel.textContent = step.event;
+    elements.eventLabel.dataset.term = step.event;
     elements.slider.value = String(state.currentStep);
     updateTimelineButtons();
 }
@@ -837,14 +869,19 @@ function inputNames(step) {
 
 function renderInputs(step, visualization) {
     const drawn = new Set((visualization?.uses || []).map(String));
-    const read = (step.inputs || []).filter((entry) => entry.read && !drawn.has(entry.name));
+    // On the line that reads a value (`cin >> n`) it already shows, blue, with the value it gets.
+    const appearing = step.usage?.appearing || {};
+    const shown = (step.inputs || [])
+        .filter((entry) => !drawn.has(entry.name) && (entry.read || Object.hasOwn(appearing, entry.name)))
+        .map((entry) => (entry.read ? [entry, false] : [{name: entry.name, ...appearing[entry.name].value}, true]));
     const onLine = new Set(step.usage?.line || []);
-    elements.algorithmInputs.replaceChildren(...read.map((entry) => {
+    elements.algorithmInputs.replaceChildren(...shown.map(([entry, isNew]) => {
         const item = textSpan(`${entry.name} = ${numberText(entry)}`, "algorithm-readout");
         item.classList.toggle("is-on-line", onLine.has(entry.name));
+        item.classList.toggle("is-new", isNew);
         return item;
     }));
-    elements.algorithmInputs.hidden = !read.length;
+    elements.algorithmInputs.hidden = !shown.length;
 }
 
 function renderVariables(step, visualization) {
@@ -877,6 +914,8 @@ function renderVariables(step, visualization) {
     // pushes the other out of view. Both keep the order the variables first appeared in.
     const zones = document.createElement("div");
     zones.className = "variable-zones";
+    const isCpp = state.language === "cpp";
+    zones.classList.toggle("is-cpp", isCpp);
     const scalars = document.createElement("div");
     scalars.className = "scalar-zone";
     const containers = document.createElement("div");
@@ -893,6 +932,7 @@ function renderVariables(step, visualization) {
         card.classList.toggle("is-changed", changed.has(name));
         // Blue: shown for the first time in this trace.
         card.classList.toggle("is-new", appeared.has(name));
+        if (appeared.has(name)) card.dataset.term = "First appearance";
         const nameNode = textSpan(name, "variable-label");
         const hint = isScalar ? "" : CONTAINER_HINTS[value?.class_name] || "";
         const type = textSpan(
@@ -907,7 +947,9 @@ function renderVariables(step, visualization) {
             // computes the next one, and that value.
             const before = renderValue(value, 0);
             before.classList.add("change-before");
-            content.append(before, textSpan("->", "change-arrow"));
+            const arrow = textSpan("->", "change-arrow");
+            arrow.dataset.term = "now -> next";
+            content.append(before, arrow);
             if (formula) content.append(textSpan(formula, "change-formula"));
             content.append(renderValue(upcoming[name], 0));
         } else if (formula) {
@@ -916,7 +958,15 @@ function renderVariables(step, visualization) {
         } else {
             content.append(renderValue(value, 0, upcomingCells[name]));
         }
-        if (isScalar) {
+        if (isScalar && isCpp) {
+            // Read like a C++ declaration: `bool flag false`.
+            const declared = cppTypeName(value);
+            type.textContent = declared.text;
+            type.classList.toggle("is-kind", !declared.declared);
+            if (!declared.declared) type.dataset.term = "integer";
+            card.append(type, nameNode, content);
+            scalars.append(card);
+        } else if (isScalar) {
             card.append(nameNode, content, type);
             scalars.append(card);
         } else {
@@ -939,11 +989,29 @@ function renderVariables(step, visualization) {
 // number of 10^6 or more (`(7+1000000000000000000)/2` is unreadable; the user's choice).
 function formulaText(formula, result) {
     if (!formula || /^[-+]?[\d.][\w.']*$/.test(formula.expression.trim())) return "";
-    const parts = [formula.expression];
     const resultText = compactValue(result);
+    // `flag = false`: a literal that is already the value adds nothing.
+    if (formula.expression.trim() === resultText) return "";
+    const parts = [formula.expression];
     const substituted = formula.substituted;
     if (substituted !== formula.expression && substituted !== resultText && !/\d{7,}/.test(substituted)) parts.push(substituted);
     return `${parts.join(" = ")} = `;
+}
+
+// The type a C++ variable was declared with (`long long`, `string`), from the tracer's `c_type`.
+// Without one only the kind of value is known, so that is what shows (`integer`, never a guessed
+// `int` for what may be a `long long`), marked as a kind rather than a declaration.
+const CPP_VALUE_KINDS = {int: "integer", float: "floating", str: "text", bool: "bool", none: "pointer"};
+
+function cppTypeName(value) {
+    if (value?.c_type) return {text: value.c_type, declared: true};
+    return {text: CPP_VALUE_KINDS[value?.type] || displayType(value), declared: false};
+}
+
+// C++ spells booleans in lowercase; Python keeps True and False.
+function boolText(value) {
+    if (state.language === "cpp") return value ? "true" : "false";
+    return value ? "True" : "False";
 }
 
 // Which end of a decoded C++ container is which.
@@ -1004,7 +1072,9 @@ function renderValue(value, depth, changes = null) {
     const changedItems = new Set(changes?.items || []);
     const changedTableCells = new Set((changes?.cells || []).map(([row, column]) => `${row}:${column}`));
     if (value.type === "reference") {
-        return textSpan(`↪ ${objectLabel(value.object_id)}`, "reference-value");
+        const reference = textSpan(referenceText(value.object_id), "reference-value");
+        reference.dataset.term = "same list as";
+        return reference;
     }
     if (value.type === "str") {
         return textSpan(JSON.stringify(value.value) + truncatedSuffix(value), "primitive str");
@@ -1013,7 +1083,7 @@ function renderValue(value, depth, changes = null) {
         return textSpan(numberText(value), "primitive number");
     }
     if (value.type === "bool") {
-        return textSpan(value.value ? "True" : "False", "primitive bool");
+        return textSpan(boolText(value.value), "primitive bool");
     }
     if (value.type === "none") return textSpan("None", "primitive none");
 
@@ -1040,7 +1110,22 @@ function renderValue(value, depth, changes = null) {
             cell.append(indexNode, itemNode);
             array.append(cell);
         });
-        if (items.length) wrapper.append(array);
+        // Entries the highlighted line is about to push, after the current ones, in blue.
+        if (!value.fill && !value.truncated) {
+            (changes?.appended || []).forEach((item, offset) => {
+                const cell = document.createElement("div");
+                cell.className = "array-cell is-new-cell";
+                const indexNode = document.createElement("div");
+                indexNode.className = "array-index";
+                indexNode.textContent = value.type === "list" || value.type === "tuple" ? items.length + offset : "item";
+                const itemNode = document.createElement("div");
+                itemNode.className = "array-item";
+                itemNode.append(renderValue(item, depth + 1));
+                cell.append(indexNode, itemNode);
+                array.append(cell);
+            });
+        }
+        if (array.childElementCount) wrapper.append(array);
         else if (!value.fill && !value.truncated) wrapper.append(textSpan("empty", "fill-note"));
         if (value.fill) {
             wrapper.append(textSpan(fillNote(value), "fill-note"));
@@ -1171,11 +1256,11 @@ function numberText(value) {
 
 function compactValue(value, depth = 0) {
     if (!value) return "—";
-    if (value.type === "reference") return `↪ ${objectLabel(value.object_id)}`;
+    if (value.type === "reference") return referenceText(value.object_id);
     if (value.type === "str") return JSON.stringify(value.value.length > 18 ? `${value.value.slice(0, 18)}…` : value.value);
     if (value.type === "none") return "None";
     if (["int", "float"].includes(value.type)) return numberText(value);
-    if (value.type === "bool") return value.value ? "True" : "False";
+    if (value.type === "bool") return boolText(value.value);
     if (depth > 0 && containerTypes.has(value.type)) return objectLabel(value.object_id);
     if (["list", "tuple", "set", "frozenset"].includes(value.type)) {
         const brackets = value.type === "tuple" ? ["(", ")"] : value.type === "list" ? ["[", "]"] : ["{", "}"];
@@ -1224,6 +1309,21 @@ function indexObjects(steps) {
 
 function objectLabel(objectId) {
     return state.objectLabels.get(String(objectId)) || "Object";
+}
+
+// `b = a` makes b a second name for a's list: say so by name, `↪ same list as a`, instead of an
+// object number shown nowhere else. Falls back to the number when no variable holds it directly.
+function referenceText(objectId) {
+    const step = state.result?.steps?.[state.currentStep];
+    const scopes = [step?.locals || {}, step?.globals || {}];
+    for (const scope of scopes) {
+        for (const [name, value] of Object.entries(scope)) {
+            if (value?.type !== "reference" && value?.object_id !== undefined && String(value.object_id) === String(objectId)) {
+                return `↪ same ${value.type === "dict" ? "dict" : value.type || "object"} as ${name}`;
+            }
+        }
+    }
+    return `↪ ${objectLabel(objectId)}`;
 }
 
 function titleCase(value) {
@@ -1349,12 +1449,12 @@ function renderAlgorithmProfile(profile) {
         confidence: 0,
         evidence: [],
     };
-    const percent = Math.round((algorithm.confidence || 0) * 100);
     elements.algorithmName.textContent = algorithm.name;
-    elements.algorithmConfidence.textContent = `${percent}% heuristic match`;
+    // The name is a guess from code patterns; its score is a ranking, not a probability, so no
+    // percentage is shown as if it were one.
+    elements.algorithmConfidence.textContent = "guessed from the code";
+    elements.algorithmConfidence.dataset.term = "guessed from the code";
     elements.algorithmConfidence.className = "confidence-badge";
-    if (percent >= 80) elements.algorithmConfidence.classList.add("high");
-    else if (percent >= 60) elements.algorithmConfidence.classList.add("medium");
     elements.algorithmEvidence.textContent = (algorithm.evidence || []).join(", ") || "No specialized pattern matched";
 }
 
@@ -1370,6 +1470,7 @@ function renderAlgorithm(visualization) {
         array: renderArrayAlgorithm,
         cells: renderCellsAlgorithm,
         graph: renderGraphAlgorithm,
+        segment_tree: renderSegmentTreeAlgorithm,
         recursion_tree: renderRecursionTreeAlgorithm,
         call_tree: renderCallTreeAlgorithm,
         execution: renderExecutionAlgorithm,
@@ -1395,13 +1496,26 @@ function renderGridAlgorithm(view) {
     meta.className = "algorithm-meta";
     const dimensions = document.createElement("span");
     dimensions.textContent = `${view.name || "grid"}, ${rows.length} × ${columns}${view.truncated ? ", clipped" : ""}${view.carried ? ", last known state" : ""}`;
-    meta.append(dimensions, algorithmLegend([
-        ["visited", "Visited"],
-        ["frontier", "Frontier"],
-        ["active", "Current"],
-        ["written", "Written"],
-        ["wall", "Blocked"],
-    ]));
+    // Only the marks this step really has are explained.
+    const marked = (cells) => (cells || []).some((row) => (Array.isArray(row) ? row.some(Boolean) : Boolean(row)));
+    const legend = [
+        ["visited", "Visited", marked(view.visited)],
+        ["frontier", "Frontier", marked(view.frontier)],
+        ["active", "Current", marked(view.active)],
+        ["written", "Written", marked(view.written)],
+        ["wall", "Blocked", marked(view.walls)],
+    ].filter(([, , shown]) => shown).map(([kind, label]) => [kind, label]);
+    meta.append(dimensions);
+    if (legend.length) meta.append(algorithmLegend(legend));
+    // The cells the code holds, as numbers, and the queue in the order it will be taken.
+    const details = [...(view.coordinates || [])];
+    if (view.queue) details.push(`${view.queue.name}: ${view.queue.entries.join(" ") || "empty"}`);
+    if (details.length) {
+        const readouts = document.createElement("div");
+        readouts.className = "algorithm-readouts grid-readouts";
+        details.forEach((text) => readouts.append(textSpan(text, "algorithm-readout")));
+        meta.append(readouts);
+    }
     const written = new Set((view.written || []).map((cell) => `${cell.row}:${cell.column}`));
 
     const visited = new Set();
@@ -1443,8 +1557,10 @@ function renderGridAlgorithm(view) {
             if (frontier.has(key)) cell.classList.add("frontier");
             if (active.has(key)) cell.classList.add(active.get(key));
             if (written.has(key)) cell.classList.add("written");
-            cell.textContent = gridCellText(value);
-            cell.title = `row ${rowIndex}, column ${columnIndex}: ${value === "\0" ? "unset" : String(value)}`;
+            // Numbers beyond 2^53 print from their exact text twin.
+            const exact = view.rows_text?.[rowIndex]?.[columnIndex] ?? value;
+            cell.textContent = gridCellText(exact);
+            cell.title = `row ${rowIndex}, column ${columnIndex}: ${value === "\0" ? "unset" : String(exact)}`;
             grid.append(cell);
         });
     });
@@ -1479,6 +1595,7 @@ function algorithmLegend(items) {
         swatch.className = `legend-swatch ${className}`;
         const text = document.createElement("span");
         text.textContent = label;
+        item.dataset.term = label;
         item.append(swatch, text);
         legend.append(item);
     });
@@ -1491,8 +1608,15 @@ function renderArrayAlgorithm(view) {
         return;
     }
     const values = view.values || [];
-    const numericValues = values.map(Number);
-    const maxMagnitude = Math.max(1, ...numericValues.map((value) => Math.abs(value)));
+    // Entries the highlighted line pushed are blue on this step only.
+    const added = new Set(view.added || []);
+    // Labels print the exact digits: numbers beyond 2^53 reach the browser rounded.
+    const texts = (view.values_text || values).map(String);
+    // "Infinity" placeholders (INF = 1e9) are drawn apart and do not set the scale.
+    const infinite = new Set(view.infinite || []);
+    const finite = values.map(Number).filter((value, index) => !infinite.has(index) && Number.isFinite(value));
+    const highest = Math.max(0, ...finite);
+    const lowest = Math.min(0, ...finite);
     const markers = new Map();
     (view.markers || []).forEach((marker) => {
         if (!markers.has(marker.index)) markers.set(marker.index, []);
@@ -1506,15 +1630,26 @@ function renderArrayAlgorithm(view) {
     const area = algorithmViewArea(meta);
     const columnGap = 8;
     const chartPadding = {x: 36, y: 48};
-    // Value label, index label, marker row, and the gaps between them.
-    const labelSpace = 64;
+    // Index label, marker row, and the gaps between them.
+    const footSpace = 46;
     const columnWidth = Math.max(26, Math.min(72, Math.floor(
         (area.width - chartPadding.x - columnGap * (values.length - 1)) / Math.max(1, values.length),
     )));
-    const maxBarHeight = Math.max(80, area.height - chartPadding.y - labelSpace);
+    // A label wider than its column is turned on its side instead of overlapping its neighbours.
+    const longest = Math.max(1, ...values.map((value, index) => (infinite.has(index) ? 1 : texts[index].length)));
+    const vertical = longest * 8 > columnWidth;
+    const labelRoom = vertical ? Math.min(150, longest * 8 + 6) : 20;
+    const plotHeight = Math.max(80, area.height - chartPadding.y - footSpace);
+    // Positive bars rise from the zero line and negative ones hang below it.
+    const barRoom = Math.max(40, plotHeight - labelRoom * (lowest < 0 ? 2 : 1));
+    const span = Math.max(1, highest - lowest);
+    const upper = labelRoom + (barRoom * highest) / span;
+    const lower = lowest < 0 ? (barRoom * -lowest) / span + labelRoom : 0;
+    const barHeight = (value) => (value === 0 ? 0 : Math.max(3, (Math.abs(value) / span) * barRoom));
 
     const chart = document.createElement("div");
     chart.className = "array-visualizer";
+    chart.classList.toggle("vertical-values", vertical);
     chart.style.setProperty("--column", `${columnWidth}px`);
     values.forEach((value, index) => {
         const column = document.createElement("div");
@@ -1526,12 +1661,39 @@ function renderArrayAlgorithm(view) {
             column.classList.add("outside-bound");
         }
         if (written.has(index)) column.classList.add("written");
+        if (added.has(index)) column.classList.add("added");
+        const plot = document.createElement("div");
+        plot.className = "array-plot";
+        plot.style.height = `${upper + lower}px`;
+        plot.style.setProperty("--zero", `${upper}px`);
         const label = document.createElement("span");
         label.className = "array-value";
-        label.textContent = String(value);
         const bar = document.createElement("div");
         bar.className = "array-bar";
-        bar.style.height = `${8 + (Math.abs(Number(value)) / maxMagnitude) * (maxBarHeight - 8)}px`;
+        const number = Number(value);
+        if (infinite.has(index) || !Number.isFinite(number)) {
+            // Shown as ∞ at a fixed height; the exact placeholder is in the tooltip.
+            column.classList.add("infinite");
+            label.textContent = "∞";
+            label.title = texts[index];
+            bar.style.height = `${Math.max(12, (upper - labelRoom) * 0.5)}px`;
+            bar.style.bottom = `${lower}px`;
+            label.style.bottom = `${lower + Math.max(12, (upper - labelRoom) * 0.5) + 4}px`;
+        } else {
+            const height = barHeight(number);
+            label.textContent = texts[index];
+            label.title = texts[index];
+            bar.style.height = `${height}px`;
+            if (number < 0) {
+                column.classList.add("negative");
+                bar.style.top = `${upper}px`;
+                label.style.top = `${upper + height + 4}px`;
+            } else {
+                bar.style.bottom = `${lower}px`;
+                label.style.bottom = `${lower + height + 4}px`;
+            }
+        }
+        plot.append(bar, label);
         const indexNode = document.createElement("span");
         indexNode.className = "array-index";
         const itemLabel = view.labels?.[index];
@@ -1541,7 +1703,7 @@ function renderArrayAlgorithm(view) {
         if (itemLabel !== undefined && itemLabel !== null) {
             indexNode.title = `sorted position ${index} · original index ${itemLabel}`;
         }
-        column.append(label, bar, indexNode);
+        column.append(plot, indexNode);
         if (indexMarkers.length) {
             const marker = document.createElement("span");
             marker.className = "array-marker";
@@ -1558,13 +1720,24 @@ function indexedViewMeta(view, count) {
     const meta = document.createElement("div");
     meta.className = "algorithm-meta";
     const summary = document.createElement("span");
-    summary.textContent = `${view.name || "array"}, ${count} items${view.truncated ? ", clipped" : ""}${view.carried ? ", last known state" : ""}`;
+    // A list too long to read whole says how much is drawn: `a, 0–49 of 80`.
+    const size = view.length
+        ? `0–${count - 1} of ${view.length} items (the rest was not read)`
+        : `${count} items${view.truncated ? ", clipped" : ""}`;
+    summary.textContent = `${view.name || "array"}, ${size}${view.carried ? ", last known state" : ""}`;
+    if (view.carried) summary.dataset.term = "last known state";
+    else if (view.truncated || view.length) summary.dataset.term = "clipped";
+    (view.beyond || []).forEach((entry) => {
+        summary.append(textSpan(`${entry.label} = ${entry.index} is past the drawn part`, "beyond-note"));
+    });
     const details = document.createElement("div");
     details.className = "algorithm-meta-details";
-    details.append(algorithmLegend([
-        ["active", "Reading"],
-        ["written", "Written"],
-    ]));
+    // The legend explains the Reading and Written marks, so it only shows while this step has some.
+    const legend = [];
+    if ((view.markers || []).some((marker) => marker.role === "active")) legend.push(["active", "Reading"]);
+    if (view.written?.length) legend.push(["written", "Written"]);
+    if (view.added?.length) legend.push(["added", "New"]);
+    if (legend.length) details.append(algorithmLegend(legend));
     if (view.readouts?.length) {
         const readouts = document.createElement("div");
         readouts.className = "algorithm-readouts";
@@ -1586,6 +1759,7 @@ function renderCellsAlgorithm(view) {
         return;
     }
     const values = view.values || [];
+    const added = new Set(view.added || []);
     const markers = new Map();
     (view.markers || []).forEach((marker) => {
         if (!markers.has(marker.index)) markers.set(marker.index, []);
@@ -1617,6 +1791,7 @@ function renderCellsAlgorithm(view) {
             item.classList.add("outside-bound");
         }
         if (written.has(index)) item.classList.add("written");
+        if (added.has(index)) item.classList.add("added");
         const indexNode = document.createElement("span");
         indexNode.className = "cells-index";
         indexNode.textContent = String(index);
@@ -1648,17 +1823,41 @@ function renderGraphAlgorithm(view) {
     summary.className = "graph-frontier";
     const forest = view.layout === "forest";
     if (view.frontier) {
-        const front = view.frontier.items.length ? view.frontier.items.join("  ") : "empty";
+        // Whole entries when the queue holds pairs: `pq: (6, 2)  (8, 3)`.
+        const entries = view.frontier.entries || view.frontier.items;
+        const front = entries.length ? entries.join("  ") : "empty";
         summary.textContent = `${view.frontier.name}: ${front}`;
     } else if (forest) {
         summary.textContent = `${view.name}[v]: each arrow points to the parent; roots are on top`;
     } else {
         summary.textContent = `${view.name || "graph"}, ${nodes.length} vertices`;
     }
+    // Whether each edge was stored one way (arrows) or both ways, decided from the whole trace.
+    if (!forest && view.directed !== undefined) {
+        const direction = textSpan(view.directed ? " · directed" : " · undirected", "graph-direction");
+        direction.dataset.term = view.directed ? "directed" : "undirected";
+        summary.append(direction);
+    }
     const legend = forest ? [["active", "Current"]] : [["active", "Current"], ["visited", "Visited"]];
     if (view.checking) legend.push(["checking", "Edge being checked"]);
+    // Per-vertex entries the highlighted line reads (`dis[n]`): ringed, and printed with their value.
+    const reading = new Set((view.reading || []).map((entry) => entry.vertex));
+    if (reading.size) legend.push(["reading", "Reading"]);
+    // An answer path being built (`route`): its vertices and the edges between them, in order.
+    const routeNodes = view.route ? [...view.route.items, ...(view.route.next ? [view.route.next] : [])] : [];
+    const routeVertices = new Set(routeNodes);
+    const routeEdges = new Set(routeNodes.slice(1).map((node, index) => [routeNodes[index], node].sort().join(" ")));
+    if (routeNodes.length) legend.push(["route", "Route"]);
     if (view.frontier) legend.push(["frontier", `In ${view.frontier.name}`]);
     meta.append(summary, algorithmLegend(legend));
+    const readoutTexts = (view.reading || []).map((entry) => entry.text);
+    if (view.route) readoutTexts.unshift(`${view.route.name}: ${view.route.items.join(" ")}`);
+    if (readoutTexts.length) {
+        const reads = document.createElement("div");
+        reads.className = "algorithm-readouts grid-readouts";
+        readoutTexts.forEach((text) => reads.append(textSpan(text, "algorithm-readout")));
+        meta.append(reads);
+    }
     elements.algorithmView.append(meta);
     // The viewBox matches the panel, so the graph fills it and nodes can be dragged to its edges.
     const area = algorithmViewArea(meta);
@@ -1701,46 +1900,72 @@ function renderGraphAlgorithm(view) {
         defs.append(marker);
         svg.append(defs);
     }
-    // Directed edges stop at the target's rim so the arrowhead stays visible.
-    const placeEdge = (line, source, target) => {
+    // Edges joining the same two vertices (a parallel edge, or a→b beside b→a) bend apart, so
+    // each one and its weight stay visible; a lone edge is straight.
+    const pairKey = (edge) => [String(edge.source), String(edge.target)].sort().join(" ");
+    const pairSizes = new Map();
+    (view.edges || []).forEach((edge) => pairSizes.set(pairKey(edge), (pairSizes.get(pairKey(edge)) || 0) + 1));
+    const pairSeen = new Map();
+    const edgeBend = (edge) => {
+        const key = pairKey(edge);
+        const position = pairSeen.get(key) || 0;
+        pairSeen.set(key, position + 1);
+        return (position - (pairSizes.get(key) - 1) / 2) * 28;
+    };
+    // The curve through a control point pushed `bend` px off the middle of the edge, measured
+    // on the side fixed by the vertex order, so a→b and b→a bend to opposite sides.
+    const edgeCurve = (edge, source, target, bend) => {
+        const flip = String(edge.source) <= String(edge.target) ? 1 : -1;
         const dx = target.x - source.x;
         const dy = target.y - source.y;
+        const length = Math.hypot(dx, dy) || 1;
+        const normal = {x: (-dy / length) * flip, y: (dx / length) * flip};
+        const control = {
+            x: (source.x + target.x) / 2 + normal.x * bend * 2,
+            y: (source.y + target.y) / 2 + normal.y * bend * 2,
+        };
+        return {control, normal};
+    };
+    // Directed edges stop at the target's rim so the arrowhead stays visible.
+    const placeEdge = (path, edge, source, target, bend) => {
+        const {control} = edgeCurve(edge, source, target, bend);
+        const dx = target.x - control.x;
+        const dy = target.y - control.y;
         const length = Math.hypot(dx, dy) || 1;
         const inset = view.directed ? nodeRadius + 3 : 0;
-        line.setAttribute("x1", source.x);
-        line.setAttribute("y1", source.y);
-        line.setAttribute("x2", target.x - (dx / length) * inset);
-        line.setAttribute("y2", target.y - (dy / length) * inset);
+        const end = {x: target.x - (dx / length) * inset, y: target.y - (dy / length) * inset};
+        path.setAttribute("d", `M ${source.x} ${source.y} Q ${control.x} ${control.y} ${end.x} ${end.y}`);
     };
     // A weight sits beside the middle of its edge, pushed off the line so both stay readable.
-    const placeWeight = (text, source, target) => {
-        const dx = target.x - source.x;
-        const dy = target.y - source.y;
-        const length = Math.hypot(dx, dy) || 1;
-        text.setAttribute("x", (source.x + target.x) / 2 - (dy / length) * 9);
-        text.setAttribute("y", (source.y + target.y) / 2 + (dx / length) * 9);
+    const placeWeight = (text, edge, source, target, bend) => {
+        const {control, normal} = edgeCurve(edge, source, target, bend);
+        const side = bend < 0 ? -1 : 1;
+        text.setAttribute("x", 0.25 * source.x + 0.5 * control.x + 0.25 * target.x + normal.x * 10 * side);
+        text.setAttribute("y", 0.25 * source.y + 0.5 * control.y + 0.25 * target.y + normal.y * 10 * side);
     };
     const edgeElements = [];
     (view.edges || []).forEach((edge) => {
         const source = positions.get(String(edge.source));
         const target = positions.get(String(edge.target));
         if (!source || !target) return;
-        const line = svgElement("line", {class: "algorithm-graph-edge"});
+        const bend = edgeBend(edge);
+        const line = svgElement("path", {class: "algorithm-graph-edge"});
         // The edge from the current vertex to the neighbour the code is looking at.
         const checked = view.checking && [edge.source, edge.target].map(String).sort().join(" ")
             === [view.checking.source, view.checking.target].map(String).sort().join(" ");
         if (checked) line.classList.add("checking");
+        if (routeEdges.has(pairKey(edge))) line.classList.add("on-route");
         if (view.directed) line.setAttribute("marker-end", "url(#graph-arrow)");
-        placeEdge(line, source, target);
+        placeEdge(line, edge, source, target, bend);
         svg.append(line);
         let weight = null;
         if (edge.weight !== undefined && edge.weight !== null) {
             weight = svgElement("text", {class: "algorithm-graph-weight"});
             weight.textContent = String(edge.weight);
-            placeWeight(weight, source, target);
+            placeWeight(weight, edge, source, target, bend);
             svg.append(weight);
         }
-        edgeElements.push({edge, line, weight});
+        edgeElements.push({edge, line, weight, bend});
     });
     const nodeElements = new Map();
     nodes.forEach((node) => {
@@ -1750,8 +1975,11 @@ function renderGraphAlgorithm(view) {
         if (visited.has(String(node))) classes.push("visited");
         if (String(view.current) === String(node)) classes.push("current");
         if (queued.has(nodeId)) classes.push("queued");
+        if (reading.has(nodeId)) classes.push("reading");
+        if (routeVertices.has(nodeId)) classes.push("on-route");
         const group = svgElement("g", {class: classes.join(" "), transform: `translate(${position.x} ${position.y})`});
         if (queued.has(nodeId)) group.append(svgElement("circle", {class: "queue-ring", r: String(nodeRadius + 5)}));
+        if (reading.has(nodeId)) group.append(svgElement("circle", {class: "reading-ring", r: String(nodeRadius + 9)}));
         group.append(svgElement("circle", {r: String(nodeRadius)}));
         const label = svgElement("text");
         label.textContent = String(node);
@@ -1759,19 +1987,19 @@ function renderGraphAlgorithm(view) {
         if (Object.hasOwn(labels, nodeId)) {
             // A per-vertex value such as dis[v], written beside the vertex.
             const value = svgElement("text", {class: "node-value", x: String(nodeRadius + 6), y: String(-nodeRadius + 6)});
-            value.textContent = `${view.labels.name}=${labels[nodeId]}`;
+            value.textContent = `${view.labels.name}=${view.labels.values_text?.[nodeId] ?? labels[nodeId]}`;
             group.append(value);
         }
         svg.append(group);
         nodeElements.set(nodeId, group);
     });
     const updateEdges = () => {
-        edgeElements.forEach(({edge, line, weight}) => {
+        edgeElements.forEach(({edge, line, weight, bend}) => {
             const source = positions.get(String(edge.source));
             const target = positions.get(String(edge.target));
             if (!source || !target) return;
-            placeEdge(line, source, target);
-            if (weight) placeWeight(weight, source, target);
+            placeEdge(line, edge, source, target, bend);
+            if (weight) placeWeight(weight, edge, source, target, bend);
         });
     };
     enableSvgNodeDragging({
@@ -1865,9 +2093,127 @@ function recursionNodeText(node) {
     return node.order ? `#${node.order} ${node.label}` : node.label;
 }
 
+const SEGMENT_NODE = {height: 42, gapX: 10, levelGap: 34, padding: 16, charWidth: 8.4, baseHeight: 30};
+
+// A segment tree: every node with its value and range, the running node, the calls on the
+// stack, the nodes the line reads, and the original array under the leaves. Node positions
+// come from the server (`layout`), computed once per trace.
+function renderSegmentTreeAlgorithm(view) {
+    const layout = (state.result?.algorithm?.views || []).find((item) => item.renderer === "segment_tree" && item.variable === view.name)?.layout;
+    if (!layout || !view.ready) {
+        renderAlgorithmWaiting("Waiting for the tree to be built…");
+        return;
+    }
+    const nodes = layout.nodes;
+    const values = view.values || [];
+    const rangeText = (node) => (node.l === node.r ? `${node.l}` : `${node.l}..${node.r}`);
+    const longest = Math.max(
+        3,
+        ...nodes.map((node, position) => Math.max((values[position] ?? "…").length, rangeText(node).length)),
+        ...(view.base?.values || []).map((value) => (value ?? "").length),
+    );
+    const nodeWidth = Math.ceil(longest * SEGMENT_NODE.charWidth + 18);
+    const columnWidth = nodeWidth + SEGMENT_NODE.gapX;
+    const levelHeight = SEGMENT_NODE.height + SEGMENT_NODE.levelGap;
+    const pad = SEGMENT_NODE.padding;
+    // Room left of the leaves for the original array's name.
+    const gutter = view.base ? Math.ceil(view.base.name.length * SEGMENT_NODE.charWidth + 14) : 0;
+    const treeHeight = layout.depth * levelHeight - SEGMENT_NODE.levelGap;
+    const baseTop = treeHeight + 28;
+    const contentWidth = gutter + layout.columns * columnWidth - SEGMENT_NODE.gapX + pad * 2;
+    const contentHeight = (view.base ? baseTop + SEGMENT_NODE.baseHeight + 22 : treeHeight) + pad * 2;
+
+    const meta = document.createElement("div");
+    meta.className = "algorithm-meta is-sticky";
+    const summary = document.createElement("span");
+    summary.textContent = `${view.name}, ${nodes.length} nodes over [${layout.low}, ${layout.high}]${layout.truncated ? `, top ${layout.depth} levels` : ""}${view.carried ? ", last known state" : ""}`;
+    meta.append(summary, algorithmLegend([
+        ["active", "Running now"],
+        ["on-stack", "On the call path"],
+        ["reading", "Reading"],
+        ["written", "Written"],
+    ]));
+    meta.style.width = `${Math.max(0, algorithmViewArea().width)}px`;
+    elements.algorithmView.append(meta);
+
+    const area = algorithmViewArea(meta);
+    // Shrink a little to fit, but keep values readable; past 85% the panel scrolls.
+    const scale = Math.max(0.85, Math.min(1, area.width / contentWidth, area.height / contentHeight));
+    const svg = svgElement("svg", {
+        class: "segment-tree-svg",
+        viewBox: `0 0 ${contentWidth} ${contentHeight}`,
+        width: Math.round(contentWidth * scale),
+        height: Math.round(contentHeight * scale),
+    });
+    const position = (node) => ({x: pad + gutter + node.x * columnWidth, y: pad + node.depth * levelHeight});
+    const byId = new Map(nodes.map((node) => [node.id, node]));
+    const onPath = new Set(view.path || []);
+    const reading = new Set(view.reading || []);
+    const written = new Set((view.written || []).map((index) => nodes[index]?.id));
+    const childOf = (id) => (layout.root === 0 ? [id * 2 + 1, id * 2 + 2] : [id * 2, id * 2 + 1]);
+
+    nodes.forEach((node) => childOf(node.id).forEach((childId) => {
+        const child = byId.get(childId);
+        if (!child) return;
+        const from = position(node);
+        const to = position(child);
+        svg.append(svgElement("line", {
+            class: `segment-edge${onPath.has(node.id) && onPath.has(childId) ? " on-stack" : ""}`,
+            x1: from.x + nodeWidth / 2, y1: from.y + SEGMENT_NODE.height,
+            x2: to.x + nodeWidth / 2, y2: to.y,
+        }));
+    }));
+
+    nodes.forEach((node, index) => {
+        const {x, y} = position(node);
+        const classes = ["segment-node"];
+        if (node.id === view.current) classes.push("current");
+        else if (onPath.has(node.id)) classes.push("on-stack");
+        if (reading.has(node.id)) classes.push("reading");
+        if (written.has(node.id)) classes.push("written");
+        const group = svgElement("g", {class: classes.join(" "), transform: `translate(${x} ${y})`});
+        group.append(svgElement("rect", {width: nodeWidth, height: SEGMENT_NODE.height, rx: 4}));
+        const value = svgElement("text", {class: "segment-value", x: nodeWidth / 2, y: 18});
+        value.textContent = values[index] ?? "…";
+        const range = svgElement("text", {class: "segment-range", x: nodeWidth / 2, y: 34});
+        range.textContent = rangeText(node);
+        const title = svgElement("title");
+        title.textContent = `${view.name}[${node.id}] = ${values[index] ?? "not read"} · range [${node.l}, ${node.r}]`;
+        group.append(value, range, title);
+        svg.append(group);
+    });
+
+    // The original array, one cell under each leaf.
+    if (view.base) {
+        const label = svgElement("text", {class: "segment-base-label", x: pad, y: pad + baseTop + 20});
+        label.textContent = view.base.name;
+        svg.append(label);
+        nodes.filter((node) => node.l === node.r).forEach((leaf) => {
+            const {x} = position(leaf);
+            const cell = svgElement("g", {class: "segment-base", transform: `translate(${x} ${pad + baseTop})`});
+            cell.append(svgElement("rect", {width: nodeWidth, height: SEGMENT_NODE.baseHeight, rx: 3}));
+            const text = svgElement("text", {class: "segment-value", x: nodeWidth / 2, y: 20});
+            text.textContent = view.base.values[leaf.l - layout.low] ?? "";
+            cell.append(text);
+            svg.append(cell);
+        });
+    }
+
+    const wrapper = document.createElement("div");
+    wrapper.className = "segment-tree";
+    wrapper.append(svg);
+    elements.algorithmView.append(wrapper);
+
+    // Keep the running node in view when the tree is wider than the panel.
+    const running = byId.get(view.current);
+    if (running && contentWidth * scale > area.width) {
+        elements.algorithmView.scrollLeft = (position(running).x + nodeWidth / 2) * scale - area.width / 2;
+    }
+}
+
 function renderRecursionTreeAlgorithm(view) {
     const tree = state.result?.algorithm?.recursion_tree;
-    const step = state.currentStep;
+    const step = view.at_step ?? state.currentStep;
     const nodes = (tree?.nodes || []);
     const visible = nodes.filter((node) => node.start_step <= step);
     if (!visible.length) {

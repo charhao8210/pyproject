@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="zh-Hant" data-theme="dark">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>使用說明 · Code Visual Debugger</title>
+    <link rel="icon" href="{{ url_for('static', path='/favicon.svg') }}" type="image/svg+xml">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Mono:wght@400;700&family=Atkinson+Hyperlegible+Next:wght@400;500;700&display=swap">
+    <link rel="stylesheet" href="{{ url_for('static', path='/style.css') }}?v={{ asset_version }}">
+    <script>
+        // Same theme as the debugger page.
+        try {
+            const savedTheme = localStorage.getItem("code-visual-debugger:theme");
+            if (savedTheme === "light" || savedTheme === "dark") document.documentElement.dataset.theme = savedTheme;
+        } catch (_error) {
+            // Storage can be unavailable in privacy-restricted browser contexts.
+        }
+    </script>
+    <script defer src="{{ url_for('static', path='/terms.js') }}?v={{ asset_version }}"></script>
+</head>
+<body class="help-body">
+    <main class="help-page">
+        <p class="help-back"><a href="/">← 回到 Debugger</a></p>
+        <h1>使用說明</h1>
+        <p class="help-lead">把程式貼進來執行一次，之後就能一步一步看它每一行做了什麼：變數怎麼變、資料結構長什麼樣子。在主畫面上，滑鼠停在任何圖例或標記上，也會跳出下面名詞表裡的說明。</p>
+
+        <h2 id="start">快速開始</h2>
+        <ol>
+            <li>右上角 <b>Language</b> 選 Python 或 C++。</li>
+            <li>把程式貼進 <b>Source code</b>。</li>
+            <li>把輸入資料貼進 <b>Test data（stdin）</b>，就是平常從鍵盤輸入的內容。</li>
+            <li>按 <b>Run</b>（約 1–10 秒，C++ 比較慢）。</li>
+            <li>按 <kbd>→</kbd> 或 <b>›</b> 往下一步，<kbd>←</kbd> 退回上一步，<kbd>Space</kbd> 自動播放。要改程式就按 <b>Edit code</b>。</li>
+        </ol>
+
+        <h2 id="reading">每一步怎麼看</h2>
+        <ul>
+            <li><b>黃色那一行還沒執行</b>，是「接下來要執行的這一行」。</li>
+            <li><b>視覺化圖</b>畫的是黃色那一行<b>執行完之後</b>的樣子。例如停在 <code>vis[v] = true</code> 時，v 已經打勾。</li>
+            <li><b>Variables</b> 列出現在的值；這一行會改的值寫成 <code>7 -&gt; 8</code>（現在 → 執行後）。</li>
+            <li><b>stdout</b> 是到這一步為止程式印出的內容。</li>
+        </ul>
+
+        <h2 id="layout">畫面區塊</h2>
+        <dl class="help-terms">
+            <dt>Source code</dt><dd>程式碼。執行後黃色標出目前這一行；左側是行號。</dd>
+            <dt>Test data</dt><dd>stdin 輸入資料。</dd>
+            <dt>視覺化圖（上方右側）</dt><dd>依程式的樣子自動選畫法：長條圖、格子、圖（節點與邊）、並查集、遞迴樹、線段樹。用 <b>View</b> 選單可以換畫法或指定要畫的變數。</dd>
+            <dt>Variables</dt><dd>目前的變數。左邊是單一值，右邊是陣列和容器。已經畫在圖上的變數不會在這裡重複出現；把圖收起來（Hide）就會回到這裡。</dd>
+            <dt>stdout</dt><dd>程式輸出。</dd>
+            <dt>時間軸（最下方）</dt><dd>拖曳滑桿可以跳到任何一步。<b>|‹</b>、<b>›|</b> 跳到目前迴圈的前後。右邊的速度選單控制自動播放速度。</dd>
+            <dt>Hide 與分隔線</dt><dd>每個區塊都能收起來；拖曳區塊之間的分隔線可以調整大小，雙擊分隔線恢復預設。</dd>
+        </dl>
+
+        <h2 id="errors">錯誤與限制</h2>
+        <ul>
+            <li><b>RE</b>：執行錯誤（除以零、陣列越界、assert 失敗……）。停在出錯的那一行，前面的步驟都看得到。</li>
+            <li><b>TLE</b>：超過時間（Python 3 秒、C++ 10 秒）或超過 5000 步就停下來，前面的步驟仍然保留。</li>
+            <li><b>編譯或語法錯誤</b>：錯誤的那一行會在程式碼裡標紅，訊息顯示在上方。</li>
+            <li>Python 只能 <code>import sys</code>，也不能用 <code>open</code>、<code>eval</code> 等函式。</li>
+            <li>C++ 需要電腦上有 g++ 和 gdb；<code>unordered_map</code> 等容器只會顯示「contents not decoded」。</li>
+            <li>很長的陣列只讀取前 50 項，圖上會寫「0–49 of 80 items」。</li>
+            <li>演算法名稱是從程式碼猜的（「guessed from the code」），可能猜錯。</li>
+        </ul>
+
+        <h2 id="terms">名詞表</h2>
+        <p>主畫面上，滑鼠停在這些字上也會看到同樣的說明。</p>
+        <div id="glossary"></div>
+    </main>
+    <script>
+        // The glossary comes from terms.js, the same list the debugger's hover boxes use.
+        document.addEventListener("DOMContentLoaded", () => {
+            const glossary = document.querySelector("#glossary");
+            const groups = new Map();
+            (window.DebuggerTerms?.list || []).forEach((entry) => {
+                if (!groups.has(entry.group)) groups.set(entry.group, []);
+                groups.get(entry.group).push(entry);
+            });
+            groups.forEach((entries, group) => {
+                const heading = document.createElement("h3");
+                heading.textContent = group;
+                const list = document.createElement("dl");
+                list.className = "help-terms";
+                entries.forEach((entry) => {
+                    const term = document.createElement("dt");
+                    term.textContent = entry.term === "In queue" ? "In q / In pq / In stack" : entry.term;
+                    const meaning = document.createElement("dd");
+                    meaning.textContent = entry.tip;
+                    list.append(term, meaning);
+                });
+                glossary.append(heading, list);
+            });
+        });
+    </script>
+</body>
+</html>

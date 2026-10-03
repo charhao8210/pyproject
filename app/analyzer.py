@@ -3,13 +3,14 @@ from __future__ import annotations
 import ast
 import re
 from dataclasses import dataclass, replace
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
+from . import segment_tree
 from .loops import loop_jumps, loop_ranges
 from .recursion import build_recursion_tree
 from .serializer import MAX_ITEMS
 from .inputs import input_values
-from .usage import variable_usage
+from .usage import front_removed, variable_usage
 
 
 MAX_VISUAL_ROWS = 30
@@ -26,6 +27,9 @@ class AlgorithmProfile:
     evidence: tuple[str, ...]
     # Arrays the loops write, most deeply nested first: what an array view should draw.
     focus: tuple[str, ...] = ()
+    # (container, index variable) for every `a[i]` in the source: an index marker is drawn
+    # only on a container that variable indexes (`l[i]` does not put `i` on `v`).
+    subscripts: frozenset[tuple[str, str]] = frozenset()
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -121,6 +125,7 @@ def analyze_execution(
         features.visit(tree)
         profile = _classify(features, shapes)
     profile = _with_focus(profile, source, language)
+    profile = replace(profile, subscripts=_subscripts(source))
 
     parent_name, first_vertex = _union_find_parent(source)
     if parent_name is not None:
@@ -139,6 +144,28 @@ def analyze_execution(
             0,
             {"id": f"dsu:{parent_name}", "renderer": "dsu", "variable": parent_name, "first": first_vertex},
         )
+
+    # A recursive segment tree (`tree[id*2]`, `tree[id*2+1]` over `[l, r]`) is drawn as the tree.
+    segment_spec = segment_tree.detect(source, language)
+    segment_layout = segment_tree.layout(segment_spec, steps, scopes) if segment_spec else None
+    segment_paths: list[list[int]] = []
+    source_lines = source.split("\n")
+    if segment_layout is not None:
+        segment_paths = segment_tree.call_paths(segment_spec, steps, scopes)
+        catalog.insert(0, {
+            "id": f"segment_tree:{segment_spec['array']}",
+            "renderer": "segment_tree",
+            "variable": segment_spec["array"],
+            "layout": segment_layout,
+        })
+        if parent_name is None:
+            profile = AlgorithmProfile(
+                "segment_tree",
+                "Segment tree",
+                "segment_tree",
+                0.9,
+                (f"{segment_spec['array']}[{segment_spec['node']}*2] children", "recursive range split"),
+            )
     recursion_tree, recursion_steps = (
         build_recursion_tree(steps, language)
         if any(view["renderer"] == "recursion_tree" for view in catalog)
@@ -151,29 +178,51 @@ def analyze_execution(
     extents = _grid_extents(scopes)
     last_ready: dict[str, dict[str, Any]] = {}
     previous: dict[str, dict[str, Any]] = {}
+    # The "infinity" placeholder values seen in each array so far (`_mark_infinite`).
+    sentinels: dict[str, set[Any]] = {}
     for index, (step, scope) in enumerate(zip(steps, scopes)):
         step["usage"] = usage[index]
         step["loop"] = loops[index]
         step["inputs"] = inputs[index]
         input_names = {entry["name"] for entry in inputs[index]}
-        visualization = _carry(AUTO_VIEW, _visualization_for(profile, scope, step, extents), last_ready, step)
+        automatic = _visualization_for(profile, scope, step, extents)
+        if profile.renderer == "call_tree" and recursion_steps and recursion_tree and recursion_tree["nodes"]:
+            # A function calling itself reads best as its recursion tree: every call with its
+            # arguments (`fib(4)`, `fib(3)`) and returned value, not a chain of bare `fib()`.
+            automatic = {"renderer": "recursion_tree", "ready": True, **recursion_steps[index]}
+        visualization = _carry(AUTO_VIEW, automatic, last_ready, step)
         _drop_input_readouts(visualization, input_names)
-        _mark_writes(visualization, previous.get(AUTO_VIEW))
+        previous_scope = scopes[index - 1] if index else None
+        _mark_writes(visualization, previous.get(AUTO_VIEW), scope, previous_scope)
+        _mark_line_reads(visualization, step, scope, source_lines, language)
+        _mark_infinite(visualization, sentinels)
         previous[AUTO_VIEW] = visualization
         step["visualization"] = visualization
 
         views: dict[str, dict[str, Any]] = {}
         for view in catalog:
             recursion_state = recursion_steps[index] if recursion_steps else None
-            model = _view_model(view, profile, scope, step, recursion_state, language, extents)
+            if view["renderer"] == "segment_tree":
+                line = step.get("line")
+                line_text = source_lines[line - 1] if isinstance(line, int) and 1 <= line <= len(source_lines) else ""
+                model = segment_tree.model(
+                    segment_spec, segment_layout, scope, step, segment_paths[index], line_text, language
+                )
+            else:
+                model = _view_model(view, profile, scope, step, recursion_state, language, extents)
             model = _carry(view["id"], model, last_ready, step)
             _drop_input_readouts(model, input_names)
-            _mark_writes(model, previous.get(view["id"]))
+            _mark_writes(model, previous.get(view["id"]), scope, previous_scope)
+            _mark_line_reads(model, step, scope, source_lines, language)
+            _mark_infinite(model, sentinels)
             previous[view["id"]] = model
             views[view["id"]] = model
         step["views"] = views
-        if profile.renderer == "dsu" and catalog[0]["renderer"] == "dsu":
+        if profile.renderer in {"dsu", "segment_tree"} and catalog[0]["renderer"] == profile.renderer:
             step["visualization"] = views[catalog[0]["id"]]
+
+    _orient_graphs(steps)
+    _show_line_effects(steps)
 
     # The profile can name a renderer whose data never shows up (a 1D `dp` for a
     # "DP table"); Auto then falls back to the first view that draws something.
@@ -207,6 +256,151 @@ def analyze_execution(
     return result
 
 
+_VERTEX_READ = re.compile(r"(?<![\w.])([A-Za-z_]\w*)\s*\[\s*([A-Za-z_]\w*|\d+)\s*\](?!\s*\[)")
+
+
+def _mark_line_reads(
+    model: dict[str, Any],
+    step: dict[str, Any],
+    scope: dict[str, Any],
+    source_lines: list[str],
+    language: str,
+) -> None:
+    """Per-vertex entries the step's line reads (`if (dis[n] == 0)`): the vertex is marked
+    Reading and the entry printed with its value, `dis[n] = 3`."""
+    if model.get("renderer") != "graph" or not model.get("ready") or model.get("layout") == "forest":
+        return
+    line = step.get("line")
+    text = source_lines[line - 1] if isinstance(line, int) and 1 <= line <= len(source_lines) else ""
+    if language == "cpp":
+        text = re.sub(r"//.*$", "", text)
+    else:
+        text = text.split("#", 1)[0]
+    nodes = set(model.get("nodes") or [])
+    reading = []
+    for match in _VERTEX_READ.finditer(text):
+        name, index_text = match.groups()
+        values = scope.get(name)
+        index = int(index_text) if index_text.isdigit() else scope.get(index_text)
+        if not isinstance(values, list) or not _is_index(index) or not 0 <= index < len(values):
+            continue
+        value = values[index]
+        if str(index) not in nodes or not _is_single_value(value):
+            continue
+        entry = {"vertex": str(index), "text": f"{name}[{index_text}] = {_display_value(value, language)}"}
+        if entry not in reading:
+            reading.append(entry)
+    model["reading"] = reading
+
+
+def _is_single_value(value: Any) -> bool:
+    return isinstance(value, (int, float, str, bool)) and not isinstance(value, list)
+
+
+def _show_line_effects(steps: list[dict[str, Any]]) -> None:
+    """Draw each step's views as they are once its highlighted line has run.
+
+    A stop comes before its line runs, so the state recorded there misses what that line does:
+    `vis[v] = true` only showed as visited one step later (the user's complaint). Each step now
+    shows the next stop's state, whose `written` / `added` marks are exactly that line's writes.
+    The current-line view keeps its own step, a segment tree keeps the nodes this line reads,
+    and the names either state draws stay out of Variables. `at_step` is the step drawn.
+    """
+    own = [(step["visualization"], step["views"]) for step in steps]
+    for index, step in enumerate(steps):
+        after = index + 1
+        if after >= len(steps) or step.get("event") in {"exception", "stopped"}:
+            continue
+        mine_auto, mine_views = own[index]
+        next_auto, next_views = own[after]
+        step["visualization"] = _after_line(mine_auto, next_auto, after)
+        step["views"] = {
+            view_id: _after_line(model, next_views.get(view_id, model), after)
+            for view_id, model in mine_views.items()
+        }
+
+
+def _after_line(mine: dict[str, Any], after: dict[str, Any], after_index: int) -> dict[str, Any]:
+    if mine.get("renderer") == "execution" or after.get("renderer") != mine.get("renderer"):
+        return mine
+    shown = {**after, "at_step": after_index}
+    if mine.get("renderer") == "segment_tree":
+        # Node values after the line; where the code is (its call path) and what the line reads
+        # stay this step's, since the next stop may already be back in the caller.
+        for key in ("reading", "current", "path"):
+            if key in mine:
+                shown[key] = mine[key]
+    if mine.get("renderer") == "graph":
+        # What the line reads (`dis[n]`) is read before it runs, so it is this step's.
+        shown["reading"] = mine.get("reading", [])
+    uses = [*after.get("uses", []), *mine.get("uses", [])]
+    if uses:
+        shown["uses"] = list(dict.fromkeys(uses))
+    return shown
+
+
+def _orient_graphs(steps: list[dict[str, Any]]) -> None:
+    """Decide once per trace whether each graph is directed, and draw undirected edges once.
+
+    An undirected adjacency list stores every edge both ways (`adj[a].push_back(b)` and
+    `adj[b].push_back(a)`); a directed one (`adj[a].push_back({b, c})` only) does not. The
+    fullest state of the graph decides, since an edge is half-stored between its two pushes.
+    Parallel edges (`1 → 3` twice) are kept: the view bends them apart.
+    """
+    models = []
+    seen: set[int] = set()
+    for step in steps:
+        for model in (step.get("visualization"), *(step.get("views") or {}).values()):
+            if (
+                isinstance(model, dict)
+                and model.get("renderer") == "graph"
+                and model.get("ready")
+                and model.get("layout") != "forest"
+                and id(model) not in seen
+            ):
+                seen.add(id(model))
+                models.append(model)
+    fullest: dict[str, list[dict[str, str]]] = {}
+    for model in models:
+        name = str(model.get("name"))
+        if len(model.get("edges") or []) >= len(fullest.get(name, [])):
+            fullest[name] = model.get("edges") or []
+    directed = {name: not _symmetric(edges) for name, edges in fullest.items() if edges}
+    for model in models:
+        name = str(model.get("name"))
+        if name not in directed:
+            continue
+        model["directed"] = directed[name]
+        if not directed[name]:
+            model["edges"] = _undirected_edges(model.get("edges") or [])
+
+
+def _edge_key(edge: dict[str, str], reverse: bool = False) -> tuple[str, str, Any]:
+    ends = (edge["target"], edge["source"]) if reverse else (edge["source"], edge["target"])
+    return (*ends, edge.get("weight"))
+
+
+def _symmetric(edges: list[dict[str, str]]) -> bool:
+    counts: dict[tuple[str, str, Any], int] = {}
+    for edge in edges:
+        counts[_edge_key(edge)] = counts.get(_edge_key(edge), 0) + 1
+    return all(counts.get((target, source, weight), 0) == count for (source, target, weight), count in counts.items())
+
+
+def _undirected_edges(edges: list[dict[str, str]]) -> list[dict[str, str]]:
+    """Each stored pair `a → b`, `b → a` once; two edges between the same vertices stay two."""
+    pending: dict[tuple[str, str, Any], int] = {}
+    kept = []
+    for edge in edges:
+        reverse = _edge_key(edge, reverse=True)
+        if pending.get(reverse):
+            pending[reverse] -= 1
+            continue
+        pending[_edge_key(edge)] = pending.get(_edge_key(edge), 0) + 1
+        kept.append(edge)
+    return kept
+
+
 def _drop_input_readouts(model: dict[str, Any], input_names: set[str]) -> None:
     """Input values (`n`, `k`) are shown once in the input row, not again as a view's readout."""
     readouts = model.get("readouts")
@@ -232,8 +426,64 @@ _SUBSCRIPT_WRITE = re.compile(
 )
 
 
+_POINTER_SUBSCRIPT = re.compile(
+    r"\b([A-Za-z_]\w*)\s*\[\s*(l|r|lo|hi|low|high|left|right|mid)\s*\]", re.IGNORECASE
+)
+# `l = i + 1` (or Python's `l, r = i + 1, n - 1`): the left pointer starts after an outer
+# scan's index, as in three-sum.
+_INNER_POINTER_START = re.compile(
+    r"\b(?:l|lo|low|left|j)\s*(?:,\s*\w+\s*)?=\s*(?:i|idx)\s*\+\s*1\b", re.IGNORECASE
+)
+
+
+_SUBSCRIPT = re.compile(r"\b([A-Za-z_]\w*)\s*\[\s*([A-Za-z_]\w*)\s*(?=[\]+\-*/%])")
+
+
+def _subscripts(source: str) -> frozenset[tuple[str, str]]:
+    """`(a, i)` for each `a[i]`, `a[i+1]`, `pairs[l][0]` in the source."""
+    return frozenset((match.group(1), match.group(2)) for match in _SUBSCRIPT.finditer(source))
+
+
+def _pointer_targets(source: str) -> tuple[str, ...]:
+    """Containers the search pointers index (`pairs[l]`, `a[mid]`), most indexed first."""
+    counts: dict[str, int] = {}
+    for match in _POINTER_SUBSCRIPT.finditer(source):
+        counts[match.group(1)] = counts.get(match.group(1), 0) + 1
+    return tuple(sorted(counts, key=lambda name: -counts[name]))
+
+
+def _with_pointers(profile: AlgorithmProfile, source: str) -> AlgorithmProfile:
+    """Draw the container the pointers really index, and tell two-sum from three-sum.
+
+    Two Sum sorts a copy (`pairs`) and walks `l`/`r` over it; drawing the input `a` with
+    those markers pointed at the wrong numbers.
+    """
+    if profile.kind not in {"three_sum", "binary_search", "sorting"}:
+        return profile
+    targets = _pointer_targets(source)
+    if not targets:
+        return profile
+    lower = re.search(r"\b(?:l|lo|low|left)\b", source, re.IGNORECASE)
+    upper = re.search(r"\b(?:r|hi|high|right)\b", source, re.IGNORECASE)
+    if profile.kind == "binary_search" or not (lower and upper):
+        return replace(profile, focus=targets)
+    if _INNER_POINTER_START.search(source):
+        return replace(profile, kind="three_sum", name="Three-sum · sort + two pointers", focus=targets)
+    return AlgorithmProfile(
+        "two_pointers",
+        "Two pointers · sorted array",
+        "array",
+        0.9,
+        ("sorted sequence", "left/right pointers", "target sum"),
+        targets,
+    )
+
+
 def _with_focus(profile: AlgorithmProfile, source: str, language: str) -> AlgorithmProfile:
     """Point a generic array profile at the array its loops write (`dp`, `can`), not the input."""
+    pointed = _with_pointers(profile, source)
+    if pointed is not profile:
+        return pointed
     generic = profile.name in GENERIC_ARRAY_PROFILES
     if not generic and profile.kind != "dynamic_programming":
         return profile
@@ -368,6 +618,7 @@ def _carry(
     # Carried state was drawn from an earlier scope, so it hides no current variables.
     carried["uses"] = []
     carried["written"] = []
+    carried.pop("added", None)
     carried["event"] = step.get("event")
     renderer = carried.get("renderer")
     if renderer == "grid":
@@ -382,9 +633,28 @@ def _carry(
     return carried
 
 
-def _mark_writes(model: dict[str, Any], previous: dict[str, Any] | None) -> None:
-    """Record which entries changed since the previous step (written, as opposed to read)."""
+def _mark_writes(
+    model: dict[str, Any],
+    previous: dict[str, Any] | None,
+    scope: dict[str, Any],
+    previous_scope: dict[str, Any] | None,
+) -> None:
+    """Record which entries changed since the previous step (written, as opposed to read).
+
+    Entries a container gained at its end (a push) are `added`, not written; the step whose
+    line pushed them draws them blue (`_show_line_effects`), and the next one draws them plain.
+    A queue that lost its front (`q.pop()`) is compared after that shift, so the entries that
+    only moved down are not marked either.
+    """
     renderer = model.get("renderer")
+    if renderer == "segment_tree":
+        # Node values sit in layout order, which never changes within a trace.
+        old = previous.get("values") if previous and previous.get("ready") else None
+        model["written"] = [
+            position for position, value in enumerate(model.get("values") or [])
+            if old is not None and position < len(old) and old[position] != value
+        ] if model.get("ready") and not model.get("carried") else []
+        return
     if renderer not in {"grid", "array", "cells"}:
         return
     comparable = (
@@ -409,11 +679,43 @@ def _mark_writes(model: dict[str, Any], previous: dict[str, Any] | None) -> None
         ]
         return
     old_values = previous["values"]
+    values = model["values"]
+    # Only a container whose real length changed can have gained or lost entries; a fixed C++
+    # array keeps its length, and its drawn length (cut at the last used entry) says nothing.
+    raw = scope.get(model["name"])
+    old_raw = (previous_scope or {}).get(model["name"])
+    if not (isinstance(raw, list) and isinstance(old_raw, list) and len(raw) != len(old_raw)) or model.get("truncated"):
+        model["written"] = [
+            index for index, value in enumerate(values) if index >= len(old_values) or old_values[index] != value
+        ]
+        return
+    removed = front_removed(old_raw, raw)
+    if removed or values[: len(old_values)] == old_values:
+        model["written"] = []
+        model["added"] = list(range(max(len(old_values) - removed, 0), len(values)))
+        return
     model["written"] = [
-        index
-        for index, value in enumerate(model["values"])
-        if index >= len(old_values) or old_values[index] != value
+        index for index, value in enumerate(values) if index >= len(old_values) or old_values[index] != value
     ]
+
+
+def _mark_infinite(model: dict[str, Any], sentinels: dict[str, set[Any]]) -> None:
+    """Entries holding an "infinity" placeholder (`INF = 1e9` in a dp or dist array).
+
+    A value counts once it filled two or more entries of that array at some step (`[INF] * n`),
+    and only if it is a usual INF constant, so a large input value is never taken for one.
+    Bars draw these apart instead of letting 10^9 flatten every real value.
+    """
+    if model.get("renderer") != "array" or not model.get("ready"):
+        return
+    values = model.get("values") or []
+    known = sentinels.setdefault(str(model.get("name")), set())
+    for value in set(values):
+        if value not in known and _is_infinity(value) and values.count(value) >= 2:
+            known.add(value)
+    infinite = [index for index, value in enumerate(values) if value in known or value == float("inf")]
+    if infinite:
+        model["infinite"] = infinite
 
 
 def _graph_profile(identifiers: set[str], recursive: str | None) -> AlgorithmProfile:
@@ -805,6 +1107,14 @@ class _SetItems(list):
     unordered = True
 
 
+class _PartialItems(list):
+    """The first entries of a list too long to read whole; `total` is its real size, if known."""
+
+    def __init__(self, items: Iterable[Any], total: int | None) -> None:
+        super().__init__(items)
+        self.total = total if isinstance(total, int) and total > len(self) else None
+
+
 def _decode_value(
     value: Any,
     registry: dict[int, dict[str, Any]],
@@ -840,7 +1150,12 @@ def _decode_value(
             for item in value.get("items", [])[:MAX_VISUAL_ITEMS]
         ]
         unordered = type_name in {"set", "frozenset"} or value.get("class_name") in SET_CLASSES
-        return _SetItems(items) if unordered else items
+        if unordered:
+            return _SetItems(items)
+        if value.get("truncated") and not value.get("fill"):
+            # Only the first entries were read; the rest are unknown (not zero).
+            return _PartialItems(items, value.get("length"))
+        return items
     if type_name == "dict":
         decoded: dict[Any, Any] = {}
         for entry in value.get("entries", [])[:MAX_VISUAL_ITEMS]:
@@ -973,8 +1288,13 @@ def _grid_visualization(
     rows = [row[:column_count] for row in rows[:row_count]]
 
     visited_name, visited = _find_visited(scope, row_count, column_count)
-    active, active_names = _active_cells(scope, row_count, column_count)
+    # A wall is never visited, whatever value a table keeps for it.
+    for row, column in walls:
+        if row < row_count and column < column_count:
+            visited[row][column] = False
+    active, active_names, coordinates = _active_cells(scope, row_count, column_count)
     frontier_name, frontier = _frontier_cells(scope, row_count, column_count)
+    queue = scope.get(frontier_name) if frontier_name else None
     return {
         "renderer": "grid",
         "ready": True,
@@ -989,6 +1309,14 @@ def _grid_visualization(
         "visited": visited,
         "active": active,
         "frontier": frontier,
+        # Coordinates as numbers and the queue in its order: the coloured cells alone show
+        # neither which variable holds a cell nor which cell leaves the queue next.
+        "coordinates": coordinates,
+        "queue": (
+            {"name": frontier_name, "entries": [f"({item[0]}, {item[1]})" for item in queue[:MAX_VISUAL_ITEMS]]}
+            if isinstance(queue, list)
+            else None
+        ),
         "truncated": full_height > MAX_VISUAL_ROWS or full_width > MAX_VISUAL_COLUMNS,
         "event": step.get("event"),
     }
@@ -1144,7 +1472,9 @@ def _array_visualization(
         if projection is None:
             continue
         numeric_values, item_labels = projection
-        length = _logical_length(scope, numeric_values, (extents or {}).get(array_name, (0, 0))[0])
+        partial = isinstance(value, _PartialItems)
+        # A partly read list is not cut at its last nonzero entry: what follows is unknown.
+        length = len(numeric_values) if partial else _logical_length(scope, numeric_values, (extents or {}).get(array_name, (0, 0))[0])
         values = numeric_values[:length][:MAX_VISUAL_ITEMS]
         visualization: dict[str, Any] = {
             "renderer": "array",
@@ -1152,11 +1482,18 @@ def _array_visualization(
             "name": array_name,
             "values": values,
             **({"labels": item_labels[: len(values)]} if item_labels is not None else {}),
-            "truncated": length > len(values),
+            "truncated": partial or length > len(values),
         }
+        _mark_partial(visualization, value)
         _annotate_indexes(visualization, scope, profile, array_name)
         return visualization
     return {"renderer": "array", "ready": False}
+
+
+def _mark_partial(visualization: dict[str, Any], value: Any) -> None:
+    """Record the real size of a list only partly read (`a` has 80 entries, 50 were read)."""
+    if isinstance(value, _PartialItems) and value.total is not None:
+        visualization["length"] = value.total
 
 
 def _cells_visualization(
@@ -1172,7 +1509,8 @@ def _cells_visualization(
         items = list(value[:MAX_VISUAL_ITEMS])
         length = len(value)
     elif isinstance(value, list):
-        length = _logical_length(scope, value, (extents or {}).get(name, (0, 0))[0])
+        partial = isinstance(value, _PartialItems)
+        length = len(value) if partial else _logical_length(scope, value, (extents or {}).get(name, (0, 0))[0])
         items = value[:length][:MAX_VISUAL_ITEMS]
     else:
         return {"renderer": "cells", "ready": False}
@@ -1181,8 +1519,9 @@ def _cells_visualization(
         "ready": True,
         "name": name,
         "values": [_display_value(item, language) for item in items],
-        "truncated": length > len(items),
+        "truncated": isinstance(value, _PartialItems) or length > len(items),
     }
+    _mark_partial(visualization, value)
     _annotate_indexes(visualization, scope, profile, name)
     return visualization
 
@@ -1214,7 +1553,7 @@ def _annotate_indexes(
 ) -> None:
     """Add index markers (the entries being read), search bounds, readouts, and `uses`."""
     length = len(visualization["values"])
-    searching = profile.kind in {"three_sum", "binary_search"}
+    searching = profile.kind in {"three_sum", "two_pointers", "binary_search"}
     roles = [
         ("mid", "mid"),
         ("i", "active"),
@@ -1225,13 +1564,23 @@ def _annotate_indexes(
         *(() if searching else (("k", "compare"),)),
     ]
     markers = []
+    # Indexes into the part of a long list that was not read: named, so the view can say so.
+    beyond = []
+    indexes = {variable for _, variable in profile.subscripts}
     for variable, role in roles:
         label, index = _scope_lookup(scope, variable)
+        # A variable the code uses as an index of other containers only marks those.
+        if label in indexes and (name, label) not in profile.subscripts:
+            continue
         if _is_index(index) and 0 <= index < length:
             markers.append({"index": index, "role": role, "label": label})
+        elif _is_index(index) and length <= index < visualization.get("length", length):
+            beyond.append({"index": index, "label": label})
     visualization["markers"] = markers
+    if beyond:
+        visualization["beyond"] = beyond
 
-    uses = [name, *(marker["label"] for marker in markers)]
+    uses = [name, *(marker["label"] for marker in markers), *(entry["label"] for entry in beyond)]
     if searching:
         interval, bound_names = _search_interval(scope, length)
         if interval is not None:
@@ -1368,8 +1717,8 @@ def _graph_visualization(scope: dict[str, Any], graph_name: str | None = None) -
         current_name = next(
             (
                 key
-                for key in ("u", "node", "current", "vertex")
-                if isinstance(scope.get(key), (str, int, float))
+                for key in ("u", "node", "current", "vertex", "now", "cur")
+                if isinstance(scope.get(key), (str, int, float)) and not isinstance(scope.get(key), bool)
             ),
             None,
         )
@@ -1378,9 +1727,10 @@ def _graph_visualization(scope: dict[str, Any], graph_name: str | None = None) -
         checking = _checking_edge(scope, edges, current_name)
         if checking is not None and current_name is None:
             current_name, current = checking["from_name"], checking["source"]
-        frontier_name, frontier = _graph_frontier(scope, node_ids)
+        frontier_name, frontier, frontier_entries = _graph_frontier(scope, node_ids)
         label_name, labels = _graph_labels(scope, numeric_nodes, {name} if visited_name in GRAPH_LABEL_NAMES else {name, visited_name})
         parents = _tree_parents(node_values, edges)
+        route_name, route = _graph_route(scope, node_ids, edges, current)
         return {
             "renderer": "graph",
             "ready": True,
@@ -1391,7 +1741,7 @@ def _graph_visualization(scope: dict[str, Any], graph_name: str | None = None) -
                 current_name,
                 checking["to_name"] if checking else None,
                 frontier_name,
-                label_name,
+                route_name,
             ]),
             # The edge from the current vertex to the neighbour it is looking at.
             "checking": {"source": checking["source"], "target": checking["target"]} if checking else None,
@@ -1399,13 +1749,45 @@ def _graph_visualization(scope: dict[str, Any], graph_name: str | None = None) -
             "edges": edges[:100],
             "visited": visited,
             "current": current,
-            "frontier": {"name": frontier_name, "items": frontier} if frontier_name else None,
+            "frontier": (
+                {"name": frontier_name, "items": frontier, **({"entries": frontier_entries} if frontier_entries else {})}
+                if frontier_name
+                else None
+            ),
             "labels": {"name": label_name, "values": labels} if label_name else None,
+            # The path a backtracking loop has built so far (`route`), in order.
+            "route": route,
             # A tree is laid out from its root down instead of around a circle.
             "layout": "tree" if parents else None,
             "parents": parents,
         }
     return {"renderer": "graph", "ready": False}
+
+
+ROUTE_NAMES = ("route", "path", "ans", "answer", "res", "result", "trace", "way", "walk", "order")
+
+
+def _graph_route(
+    scope: dict[str, Any],
+    node_ids: set[str],
+    edges: list[dict[str, str]],
+    current: str | None,
+) -> tuple[str | None, dict[str, Any] | None]:
+    """A list of vertices the code builds as an answer path (CSES 1667 walks back from n by
+    `dis`, pushing each vertex): drawn as a highlighted path. While it is being built, the
+    vertex the walk has moved to (`now`) continues the path when an edge joins them."""
+    joined = {(edge["source"], edge["target"]) for edge in edges}
+    for name in ROUTE_NAMES:
+        key, value = _scope_lookup(scope, name)
+        if not isinstance(value, list) or not value:
+            continue
+        items = [str(item) for item in value if _is_index(item)]
+        if len(items) != len(value) or not all(item in node_ids for item in items):
+            continue
+        last = items[-1]
+        extends = current is not None and current != last and ((last, current) in joined or (current, last) in joined)
+        return key, {"name": key, "items": items, **({"next": current} if extends else {})}
+    return None, None
 
 
 REACHED_VERTEX_NAMES = ("team", "color", "colour", "side", "dist", "dis", "depth", "level", "comp")
@@ -1456,7 +1838,7 @@ def _tree_parents(node_values: set[Any], edges: list[dict[str, str]]) -> dict[st
 
 
 CURRENT_VERTEX_NAMES = ("u", "node", "current", "vertex", "cur", "now", "x", "s", "from")
-NEIGHBOUR_NAMES = ("v", "next", "nxt", "to", "nb", "neighbor", "neighbour", "child", "y", "w", "nx")
+NEIGHBOUR_NAMES = ("v", "next", "nxt", "to", "nb", "neighbor", "neighbour", "child", "y", "w", "nx", "prev", "pre", "p")
 
 
 def _checking_edge(
@@ -1490,7 +1872,7 @@ GRAPH_LABEL_NAMES = (
 )
 
 
-def _graph_frontier(scope: dict[str, Any], node_ids: set[str]) -> tuple[str | None, list[str]]:
+def _graph_frontier(scope: dict[str, Any], node_ids: set[str]) -> tuple[str | None, list[str], list[str] | None]:
     """The BFS queue or DFS stack: a list whose entries are all vertices of the graph.
 
     Dijkstra's priority queue holds (distance, vertex) pairs; the vertex is the second item
@@ -1501,12 +1883,15 @@ def _graph_frontier(scope: dict[str, Any], node_ids: set[str]) -> tuple[str | No
         if not isinstance(value, list):
             continue
         if all(isinstance(item, (int, str)) and str(item) in node_ids for item in value):
-            return key, [str(item) for item in value[:MAX_VISUAL_ITEMS]]
+            return key, [str(item) for item in value[:MAX_VISUAL_ITEMS]], None
         if value and all(isinstance(item, list) and len(item) == 2 for item in value):
             for position in (1, 0):
                 if all(isinstance(item[position], (int, str)) and str(item[position]) in node_ids for item in value):
-                    return key, [str(item[position]) for item in value[:MAX_VISUAL_ITEMS]]
-    return None, []
+                    # The queue line keeps whole entries, `(6, 2)`: the distance it was pushed
+                    # with can be stale, which `dist[v]` beside the vertex does not show.
+                    entries = [f"({item[0]}, {item[1]})" for item in value[:MAX_VISUAL_ITEMS]]
+                    return key, [str(item[position]) for item in value[:MAX_VISUAL_ITEMS]], entries
+    return None, [], None
 
 
 def _graph_labels(
@@ -1636,20 +2021,56 @@ def _find_visited(
     for name in REACHED_GRID_NAMES:
         key, value = _scope_lookup(scope, name)
         rows_of = _normalize_grid(_used_rows(value)) if isinstance(value, list) else []
-        if rows_of and len(rows_of) >= 1 and any(_has_content(cell) for row in rows_of for cell in row):
-            return key, [
-                [_has_content(rows_of[row][column]) if row < len(rows_of) and column < len(rows_of[row]) else False
-                 for column in range(columns)]
-                for row in range(rows)
-            ]
+        reached = _reached_test([cell for row in rows_of for cell in row])
+        if reached is None:
+            continue
+        marks = [
+            [reached(rows_of[row][column]) if row < len(rows_of) and column < len(rows_of[row]) else False
+             for column in range(columns)]
+            for row in range(rows)
+        ]
+        if any(any(row) for row in marks):
+            return key, marks
     return None, [[False] * columns for _ in range(rows)]
+
+
+# Values a distance table starts with for "not reached yet": `-1`, `INF`, `1e9`, `INT_MAX`.
+INF_CONSTANTS = frozenset({
+    10**9, 10**9 + 7, 10**18, 2**31 - 1, 2**63 - 1, 2**62, 0x3F3F3F3F, 0x3F3F3F3F3F3F3F3F, 10**9 * 2, 10**15, 10**17,
+})
+
+
+def _reached_test(cells: list[Any]) -> Callable[[Any], bool] | None:
+    """How to tell a reached cell in a distance table, from the value it starts with.
+
+    `-1` (or any negative) or an `INF` constant marks "not reached", so 0 (the start)
+    counts as reached. A table with neither (0 means unreached) marks only nonzero cells.
+    Anything else (not all numbers) cannot be read reliably and marks nothing.
+    """
+    numbers = [cell for cell in cells if _is_number(cell)]
+    if not numbers or len(numbers) != len(cells):
+        return None
+    if any(number < 0 for number in numbers):
+        return lambda cell: _is_number(cell) and cell >= 0
+    if any(_is_infinity(number) for number in numbers):
+        return lambda cell: _is_number(cell) and not _is_infinity(cell)
+    return lambda cell: _is_number(cell) and cell != 0
+
+
+def _is_infinity(value: Any) -> bool:
+    if isinstance(value, float):
+        return value == float("inf") or value >= 1e9 and value in {1e9, 1e18, 2e9}
+    return _is_index(value) and abs(value) in INF_CONSTANTS
 
 
 def _active_cells(
     scope: dict[str, Any],
     rows: int,
     columns: int,
-) -> tuple[list[dict[str, Any]], list[str]]:
+) -> tuple[list[dict[str, Any]], list[str], list[str]]:
+    """Cells the code is at (`row, col`, a pair `cur`), the names it read them from, and a
+    readout per coordinate pair (`row,col = (0, 1)`), also for one off the grid (`nr = -1`),
+    which keeps the names out of Variables whether or not the cell is on the grid."""
     # Code that walks with (c, r) uses c for the row, so nc/nr follow that order.
     new_cell = ("nc", "nr") if "c" in scope and "r" in scope else ("nr", "nc")
     patterns = (
@@ -1664,6 +2085,7 @@ def _active_cells(
     )
     cells: list[dict[str, Any]] = []
     names: list[str] = []
+    readouts: list[str] = []
     seen: set[tuple[int, int, str]] = set()
     # A cell held as a pair: `pii now = q.front();`
     for name in ("now", "cur", "current", "cell", "top", "front", "u"):
@@ -1676,21 +2098,24 @@ def _active_cells(
             and 0 <= value[1] < columns
         ):
             names.append(name)
+            readouts.append(f"{name} = ({value[0]}, {value[1]})")
             seen.add((value[0], value[1], "current"))
             cells.append({"row": value[0], "column": value[1], "role": "current"})
             break
     for row_name, column_name, role in patterns:
         row, column = scope.get(row_name), scope.get(column_name)
-        if not isinstance(row, int) or not isinstance(column, int):
-            continue
-        if not (0 <= row < rows and 0 <= column < columns):
+        if not _is_index(row) or not _is_index(column):
             continue
         names.extend((row_name, column_name))
+        inside = 0 <= row < rows and 0 <= column < columns
+        readouts.append(f"{row_name},{column_name} = ({row}, {column}){'' if inside else ' off the grid'}")
+        if not inside:
+            continue
         marker = (row, column, role)
         if marker not in seen:
             cells.append({"row": row, "column": column, "role": role})
             seen.add(marker)
-    return cells, names
+    return cells, names, readouts
 
 
 def _frontier_cells(

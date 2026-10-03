@@ -76,9 +76,19 @@ def variable_usage(
             for name in changed:
                 new = serialized.get(name)
                 single = isinstance(new, dict) and new.get("type") in SINGLE_VALUE_TYPES
+                if name not in before and not _creates(language, names_by_line.get(effect_line, set()), name):
+                    # Only came into view (`int n;` has no stop of its own): nothing to preview.
+                    continue
                 if name not in before:
                     # Declared by that line again (`int mid` in a loop): listed there with the
                     # value it gets; its first appearance is also marked `new` below.
+                    effect["appearing"][name] = {
+                        "value": new,
+                        "global": name not in (step.get("locals") or {}) and str(step.get("function")) != "<module>",
+                    }
+                elif single and language == "cpp" and name in effect["new"] and name not in effect["appearing"]:
+                    # `int n;` then `cin >> n`: n first shows up at the stop on the reading line,
+                    # holding uninitialised memory; list it with the value the line gives it.
                     effect["appearing"][name] = {
                         "value": new,
                         "global": name not in (step.get("locals") or {}) and str(step.get("function")) != "<module>",
@@ -88,6 +98,10 @@ def variable_usage(
                 else:
                     marks = _changed_cells(before[name], scope[name])
                     if marks:
+                        if "appended" in marks:
+                            # Entries the line adds, serialized, drawn after the current ones.
+                            items = new.get("items") or [] if isinstance(new, dict) else []
+                            marks["appended"] = [items[position] for position in marks["appended"] if position < len(items)]
                         effect["cells"][name] = marks
                 if single:
                     formula = assignment_formula(effect_text, name, scopes[earlier], language)
@@ -113,7 +127,10 @@ def variable_usage(
                 if (owner, name) in seen:
                     continue
                 seen.add((owner, name))
-                target = usage[earlier] if earlier is not None else current
+                created_there = earlier is not None and _creates(
+                    language, names_by_line.get(steps[earlier].get("line"), set()), name
+                )
+                target = usage[earlier] if created_there else current
                 target["new"].append(name)
                 if target is not current and name not in target["appearing"]:
                     target["appearing"][name] = {"value": value, "global": owner == "" and name not in (step.get("locals") or {})}
@@ -228,19 +245,55 @@ SINGLE_VALUE_TYPES = frozenset({"int", "float", "bool", "none", "str", "referenc
 _MISSING = object()
 
 
+def _creates(language: str, names_on_line: set[str], name: str) -> bool:
+    """Whether a line can be what creates `name`.
+
+    A C++ variable comes into view at the first stop after its declaration, and a plain
+    `int n;` has no stop of its own: the line before it (`cout.tie(0);`) neither creates `n`
+    nor gives it its uninitialised value, so that line must not preview it.
+    """
+    return language != "cpp" or name in names_on_line
+
+
+def front_removed(old: list[Any], new: list[Any]) -> int:
+    """How many entries left the front of a shrinking list (`q.pop()` of a queue), else 0.
+
+    Every remaining entry moves one position down, so comparing by position would mark all
+    of them changed. Removal from the end (`v.pop_back()`) is not counted.
+    """
+    if len(new) >= len(old) or new == old[: len(new)]:
+        return 0
+    for shift in range(1, len(old)):
+        kept = old[shift:]
+        if new[: len(kept)] == kept:
+            return shift
+    return 0
+
+
 def _changed_cells(old: Any, new: Any) -> dict[str, list[Any]] | None:
-    """Positions inside a container whose value differs from the previous step's."""
+    """Positions inside a container whose value differs from the previous step's.
+
+    `appended` holds positions in the new value of entries added at the end (a push), which
+    the current value does not have yet.
+    """
     items: list[Any] = []
     cells: list[list[int]] = []
+    appended: list[int] = []
     if isinstance(new, dict):
         before = old if isinstance(old, dict) else {}
         items = [position for position, (key, value) in enumerate(new.items()) if key not in before or before[key] != value]
     elif isinstance(new, list):
         before_items = old if isinstance(old, list) else []
+        removed = front_removed(before_items, new)
         if getattr(new, "unordered", False):
             # Set members have no fixed position: mark the ones that were not there before.
             items = [position for position, value in enumerate(new) if value not in before_items]
+        elif removed:
+            # The entries about to leave the front; anything after the kept ones is pushed.
+            items = list(range(removed))
+            appended = list(range(len(before_items) - removed, len(new)))
         else:
+            appended = list(range(len(before_items), len(new)))
             for index, value in enumerate(new):
                 previous = before_items[index] if index < len(before_items) else _MISSING
                 if previous == value:
@@ -254,6 +307,9 @@ def _changed_cells(old: Any, new: Any) -> dict[str, list[Any]] | None:
                         for column, item in enumerate(value)
                         if column >= len(row) or row[column] != item
                     )
-    if not items and not cells:
+    if not items and not cells and not appended:
         return None
-    return {"items": items, "cells": cells}
+    marks: dict[str, list[Any]] = {"items": items, "cells": cells}
+    if appended:
+        marks["appended"] = appended
+    return marks

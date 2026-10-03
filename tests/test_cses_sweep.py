@@ -24,9 +24,11 @@ def test_weighted_adjacency_lists_give_edges_with_weights() -> None:
 
 
 def test_dijkstra_queue_of_distance_vertex_pairs_is_the_frontier() -> None:
-    name, items = _graph_frontier({"pq": [[0, 1], [7, 3]]}, {"1", "2", "3"})
+    name, items, entries = _graph_frontier({"pq": [[0, 1], [7, 3]]}, {"1", "2", "3"})
 
     assert (name, items) == ("pq", ["1", "3"])
+    # The queue line keeps the whole entry: the distance it was pushed with can be stale.
+    assert entries == ["(0, 1)", "(7, 3)"]
 
 
 def test_equal_length_tables_are_graphs_only_under_graph_names() -> None:
@@ -408,3 +410,160 @@ def test_integers_beyond_javascript_precision_carry_exact_text() -> None:
     assert shared["text"] == "500000000000000003"
     assert "text" not in result["steps"][0]["locals"]["n"]
     assert result["inputs"][0]["text"] == "1000000000000000000"
+
+
+@requires_cpp
+def test_queue_pushes_are_new_and_pops_do_not_mark_every_entry_written() -> None:
+    # CSES 2162 (Josephus I): a queue rotated by push(front) + pop.
+    source = (
+        "#include <bits/stdc++.h>\n"
+        "using namespace std;\n"
+        "int main() {\n"
+        "    cout.tie(0);\n"
+        "    int n;\n"
+        "    cin >> n;\n"
+        "    queue<int> a;\n"
+        "    for (int i = 1; i <= n; i++) a.push(i);\n"
+        "    bool flag = false;\n"
+        "    while (a.size()) {\n"
+        "        if (flag) { cout << a.front() << ' '; a.pop(); flag = false; }\n"
+        "        else {\n"
+        "            a.push(a.front());\n"
+        "            a.pop();\n"
+        "            flag = true;\n"
+        "        }\n"
+        "    }\n"
+        "}\n"
+    )
+    steps = run_debugger(source, stdin_text="4\n", language="cpp")["steps"]
+    # `int n;` has no stop: the line before it must not preview n's uninitialised value.
+    assert "n" not in steps[0]["usage"]["appearing"] and steps[0]["line"] == 4
+    # The reading line lists n with the value it reads (shown blue), not garbage -> 4.
+    read = next(step for step in steps if step["line"] == 6)
+    assert read["usage"]["appearing"]["n"]["value"]["value"] == 4 and "n" not in read["usage"]["next"]
+    assert "n" in read["usage"]["new"]
+    push =next(step for step in steps if step["line"] == 13)
+    assert push["usage"]["cells"]["a"]["appended"] == [{"type": "int", "value": 1}]
+    # The pushing line's own step draws the state after it: the new entry, blue (`added`).
+    assert push["visualization"]["values"] == [1, 2, 3, 4, 1]
+    assert push["visualization"]["added"] == [4] and push["visualization"]["written"] == []
+    # The pop on the next line: the entries only moved down, so nothing is written or new.
+    pop = steps[push["step"] + 1]
+    assert pop["visualization"]["values"] == [2, 3, 4, 1]
+    assert pop["visualization"]["written"] == [] and pop["visualization"]["added"] == []
+
+
+SEGMENT_TREE = """#include <bits/stdc++.h>
+using namespace std;
+int tree[64];
+vector<int> a;
+void build(int l, int r, int id) {
+    if (l == r) { tree[id] = a[l]; return; }
+    int mid = (l + r) / 2;
+    build(l, mid, id * 2);
+    build(mid + 1, r, id * 2 + 1);
+    tree[id] = max(tree[id * 2], tree[id * 2 + 1]);
+}
+int main() {
+    a = {0, 3, 2, 4, 1};
+    build(1, 4, 1);
+    cout << tree[1];
+}
+"""
+
+
+def test_segment_tree_detection_finds_the_array_node_and_range() -> None:
+    from app.segment_tree import detect
+
+    spec = detect(SEGMENT_TREE, "cpp")
+
+    assert spec == {
+        "array": "tree", "node": "id", "lower": "l", "upper": "r",
+        "functions": ["build"], "root": 1, "base": "a",
+    }
+    python = "def build(node, lo, hi):\n    seg[2*node] = seg[2*node+1] = 0\n"
+    assert detect(python, "python")["node"] == "node"
+    assert detect("int main() { a[i*2] = 1; }", "cpp") is None
+
+
+@requires_cpp
+def test_segment_trees_are_drawn_as_trees() -> None:
+    result = run_debugger(SEGMENT_TREE, language="cpp")
+    algorithm = result["algorithm"]
+
+    assert result["steps"][-1]["stdout"] == "4"
+    assert algorithm["kind"] == "segment_tree" and algorithm["auto_renderer"] == "segment_tree"
+    layout = algorithm["views"][0]["layout"]
+    assert [(node["id"], node["l"], node["r"]) for node in layout["nodes"]] == [
+        (1, 1, 4), (2, 1, 2), (4, 1, 1), (5, 2, 2), (3, 3, 4), (6, 3, 3), (7, 4, 4),
+    ]
+    last = result["steps"][-1]["visualization"]
+    assert last["values"] == ["4", "3", "3", "2", "4", "4", "1"]
+    assert last["base"] == {"name": "a", "values": ["3", "2", "4", "1"]}
+    # On `tree[id] = max(tree[id*2], tree[id*2+1])` inside build(3, 4, 3): node 3 runs, under
+    # the root, reading its children 6 and 7.
+    combine = next(
+        step["visualization"] for step in result["steps"]
+        if step["line"] == 10 and step["visualization"].get("current") == 3
+    )
+    assert combine["path"] == [1, 3] and combine["reading"] == [6, 7]
+
+
+@requires_cpp
+def test_lambdas_are_not_shown_as_their_captures() -> None:
+    # `auto dfs = [&](auto dfs, int id) {...}; dfs(dfs, 1);`: GDB prints the closure as
+    # `{__n = @0x..., __v = @0x...}`, which listed captured addresses as a dict.
+    source = (
+        "#include <bits/stdc++.h>\n"
+        "using namespace std;\n"
+        "int main() {\n"
+        "    int n = 3, total = 0;\n"
+        "    vector<int> v = {4, 5, 6};\n"
+        "    auto add = [=](int x) { return x + n; };\n"
+        "    auto dfs = [&](auto dfs, int id) -> void {\n"
+        "        if (id == n) return;\n"
+        "        total += add(v[id]);\n"
+        "        dfs(dfs, id + 1);\n"
+        "    };\n"
+        "    dfs(dfs, 0);\n"
+        "    function<int(int)> fact = [&](int k) { return k <= 1 ? 1 : k * fact(k - 1); };\n"
+        "    sort(v.begin(), v.end(), [](int x, int y) { return x > y; });\n"
+        "    cout << total << fact(3) << endl;\n"
+        "}\n"
+    )
+    result = run_debugger(source, language="cpp")
+    assert result["status"] == "completed"
+    # A lambda's frame is named after the variable holding it, not GDB's `operator`.
+    functions = {step["function"] for step in result["steps"]}
+    assert {"dfs", "fact", "lambda"} <= functions and "operator" not in functions
+    assert any([frame["function"] for frame in step["stack"]][-2:] == ["dfs", "dfs"] for step in result["steps"])
+    lambdas = 0
+    for step in result["steps"]:
+        for name in ("dfs", "add", "fact"):
+            value = step["locals"].get(name)
+            if value is not None:
+                assert value["type"] == "function", (step["line"], name, value)
+                lambdas += 1
+    assert lambdas
+
+
+@requires_cpp
+def test_sets_and_maps_of_std_arrays_are_decoded() -> None:
+    source = (
+        "#include <bits/stdc++.h>\n"
+        "using namespace std;\n"
+        "#define int long long\n"
+        "signed main() {\n"
+        "    map<array<int, 4>, bool> mp;\n"
+        "    set<array<int, 3>> s;\n"
+        "    mp[{0, 2, 1, 0}] = true;\n"
+        "    s.insert({3, 1, 2});\n"
+        "    cout << mp.size() + s.size() << endl;\n"
+        "}\n"
+    )
+    result = run_debugger(source, language="cpp")
+    assert result["status"] == "completed"
+    last = result["steps"][-1]["locals"]
+    [entry] = last["mp"]["entries"]
+    assert [item["value"] for item in entry["key"]["items"]] == [0, 2, 1, 0] and entry["value"]["value"] is True
+    assert [item["value"] for item in last["s"]["items"][0]["items"]] == [3, 1, 2]

@@ -20,6 +20,7 @@
         }
     </script>
     <script defer src="{{ url_for('static', path='/highlight.js') }}?v={{ asset_version }}"></script>
+    <script defer src="{{ url_for('static', path='/terms.js') }}?v={{ asset_version }}"></script>
     <script defer src="{{ url_for('static', path='/app.js') }}?v={{ asset_version }}"></script>
 </head>
 <body>
@@ -45,6 +46,7 @@
                     </select>
                 </label>
                 <span id="run-status" class="status-pill idle"><span class="status-dot"></span>Ready</span>
+                <a id="help-link" class="button secondary" href="/help" target="_blank" rel="noopener">說明</a>
                 <button id="theme-button" class="button secondary" type="button">Light theme</button>
                 <button id="edit-button" class="button secondary hidden" type="button">Edit code</button>
                 <button id="run-button" class="button primary" type="button">
@@ -131,19 +133,19 @@ main()</textarea>
                         <div class="panel-header algorithm-header">
                             <h2 id="algorithm-name">Algorithm</h2>
                             <div class="algorithm-summary">
-                                <label class="view-control" for="view-select">
+                                <label class="view-control" for="view-select" data-term="View">
                                     <span>View</span>
                                     <select id="view-select" aria-label="Visualization" disabled>
                                         <option value="auto">Auto</option>
                                     </select>
                                 </label>
                                 <select id="view-variable-select" class="view-variable-select" aria-label="Variable to draw" hidden></select>
-                                <span id="algorithm-confidence" class="confidence-badge">Not analyzed</span>
+                                <span id="algorithm-confidence" class="confidence-badge" data-term="guessed from the code">Not analyzed</span>
                                 <span id="algorithm-evidence" class="panel-meta">Run code to detect its structure</span>
                                 <button class="panel-action panel-toggle" type="button" aria-expanded="true" aria-controls="algorithm-view">Hide</button>
                             </div>
                         </div>
-                        <div id="algorithm-inputs" class="algorithm-inputs" aria-label="Input values" hidden></div>
+                        <div id="algorithm-inputs" class="algorithm-inputs" aria-label="Input values" data-term="Input values" hidden></div>
                         <div id="algorithm-view" class="algorithm-canvas empty-state">
                             Run the program to see its data structure drawn here.
                         </div>
@@ -156,10 +158,10 @@ main()</textarea>
                             <h2>Variables</h2>
                             <div class="panel-tools">
                                 <span class="usage-legend">
-                                    <span class="usage-swatch on-line" aria-hidden="true"></span>Used on this line
-                                    <span class="usage-swatch changed" aria-hidden="true"></span>Changed by the last line
+                                    <span data-term="Used on this line"><span class="usage-swatch on-line" aria-hidden="true"></span>Used on this line</span>
+                                    <span data-term="Changed by the last line"><span class="usage-swatch changed" aria-hidden="true"></span>Changed by the last line</span>
                                 </span>
-                                <span id="function-name" class="panel-meta">—</span>
+                                <span id="function-name" class="panel-meta" data-term="Function">—</span>
                                 <button class="panel-action panel-toggle" type="button" aria-expanded="true" aria-controls="variables">Hide</button>
                             </div>
                         </div>
@@ -185,7 +187,7 @@ main()</textarea>
 
         <footer class="timeline" aria-label="Execution timeline">
             <div class="timeline-buttons">
-                <button id="loop-start-button" class="icon-button" type="button" disabled title="Back to before this loop" aria-label="Back to before this loop">|‹</button>
+                <button id="loop-start-button" class="icon-button" type="button" disabled data-term="Loop jump" aria-label="Back to before this loop">|‹</button>
                 <button id="previous-button" class="icon-button" type="button" disabled title="Previous step" aria-label="Previous step">‹</button>
             </div>
             <div class="playback-controls">
@@ -211,7 +213,7 @@ main()</textarea>
             </div>
             <div class="timeline-buttons">
                 <button id="next-button" class="icon-button" type="button" disabled title="Next step" aria-label="Next step">›</button>
-                <button id="loop-end-button" class="icon-button" type="button" disabled title="Skip to after this loop" aria-label="Skip to after this loop">›|</button>
+                <button id="loop-end-button" class="icon-button" type="button" disabled data-term="Loop jump" aria-label="Skip to after this loop">›|</button>
             </div>
             <span class="keyboard-hint"><kbd>←</kbd><kbd>→</kbd> step, <kbd>Space</kbd> play</span>
         </footer>

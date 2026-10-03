@@ -128,6 +128,8 @@ def _serialize_container(
     ]
     if len(items) > context.max_items:
         result["truncated"] = True
+        # The real size, so a view can say "0–49 of 80" instead of looking complete.
+        result["length"] = len(items)
     if isinstance(value, (list, tuple)):
         unread_zero = None
         if context.max_items < len(items) <= MAX_TAIL_SCAN_ITEMS:

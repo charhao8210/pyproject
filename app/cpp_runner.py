@@ -16,7 +16,9 @@ from .cpp_source import (
     SourceModel,
     ValueSpec,
     analyze_source,
+    _normalize_type,
     classify_type,
+    fixed_array_type,
     strip_code,
     template_arguments,
 )
@@ -930,17 +932,31 @@ def _tree_commands(name: str, kind: str, types: list[str], limit: int) -> list[s
 def _typed_output(type_text: str, address: str) -> list[str]:
     """GDB commands printing the value of `type_text` stored at `address` (a char pointer)."""
     if type_text.startswith("pair<"):
-        first, second = template_arguments(type_text)[:2]
-        # `second` starts at the first multiple of its size after `first` (builtin types).
-        offset = f"((sizeof({first}) + sizeof({second}) - 1) / sizeof({second})) * sizeof({second})"
+        first, second = (_normalize_type(part) for part in template_arguments(type_text)[:2])
+        first_pointer, first_size, _ = _cast_layout(first)
+        second_pointer, _, second_align = _cast_layout(second)
+        # `second` starts at the first multiple of its alignment after `first`.
+        offset = f"((({first_size}) + ({second_align}) - 1) / ({second_align})) * ({second_align})"
         return [
             "echo {first = ",
-            f"output *({first} *) ({address})",
+            f"output *({first_pointer}) ({address})",
             "echo , second = ",
-            f"output *({second} *) ({address} + {offset})",
+            f"output *({second_pointer}) ({address} + {offset})",
             "echo }",
         ]
-    return [f"output *({type_text} *) ({address})"]
+    return [f"output *({_cast_layout(type_text)[0]}) ({address})"]
+
+
+def _cast_layout(type_text: str) -> tuple[str, str, str]:
+    """(pointer type, size, alignment) GDB expressions for a builtin or `std::array` type.
+
+    `std::array<int,4>` is a plain `int[4]`: read through `int (*)[4]`, aligned like an int.
+    """
+    array = fixed_array_type(type_text)
+    if array is not None:
+        element, count = array
+        return f"{element} (*)[{count}]", f"sizeof({element}) * {count}", f"sizeof({element})"
+    return f"{type_text} *", f"sizeof({type_text})", f"sizeof({type_text})"
 
 
 def _deque_commands(expression: str, label: str, limit: int) -> list[str]:
@@ -995,7 +1011,7 @@ def _native_matrix_commands(name: str, spec: ValueSpec) -> list[str]:
 
 
 def _sequence_commands(expression: str, limit: int) -> list[str]:
-    """Print a std::vector as `{a, b}`, followed by `...` when clipped."""
+    """Print a std::vector as `{a, b}`, followed by `...@<size>` when clipped."""
     start = f"{expression}._M_impl._M_start"
     return [
         f"set $pv_total = {expression}._M_impl._M_finish - {start}",
@@ -1006,7 +1022,7 @@ def _sequence_commands(expression: str, limit: int) -> list[str]:
         "echo {}",
         "end",
         f"if $pv_total > {limit}",
-        "echo ...",
+        'printf "...@%d", $pv_total',
         "end",
     ]
 
@@ -1168,8 +1184,8 @@ def _parse_step_block(
     )
     if not frame_match:
         return None
-    function_name = frame_match.group(1).strip()
     line = int(frame_match.group(2))
+    function_name = _frame_name(frame_match.group(0), frame_match.group(1).strip(), line, model)
 
     extracted_locals = _parse_marked_values(locals_text, VECTOR_MARKER)
     extracted_globals = _parse_marked_values(locals_text, GLOBAL_MARKER)
@@ -1226,6 +1242,14 @@ def _parse_step_block(
         if (name, value) not in cache:
             cache[(name, value)] = _serialize_cpp_value(value, f"::{name}")
         globals_[name] = cache[(name, value)]
+    # Single values carry the type their declaration spells (`long long`, `string`): the
+    # serialized kind alone (`int`, `str`) would name the wrong C++ type.
+    for scope, is_global in ((serialized, False), (globals_, True)):
+        for name, value in scope.items():
+            if value.get("type") in {"int", "float", "bool", "str", "none"}:
+                declared = model.declared_type(name, line, is_global)
+                if declared:
+                    scope[name] = {**value, "c_type": declared}
     return {
         "step": index,
         "event": "line",
@@ -1234,7 +1258,7 @@ def _parse_step_block(
         "line": line,
         "locals": serialized,
         "globals": globals_,
-        "stack": _parse_stack(stack_text),
+        "stack": _parse_stack(stack_text, model),
         "stdout": stdout,
     }
 
@@ -1274,7 +1298,19 @@ def _parse_marked_values(text: str, marker: str) -> dict[str, str]:
     }
 
 
-def _parse_stack(text: str) -> list[dict[str, str | int]]:
+def _frame_name(frame_text: str, name: str, line: int, model: SourceModel | None) -> str:
+    """A function's name, or for a lambda the variable that holds it (`dfs`).
+
+    GDB names a lambda's frame `operator() (__closure=0x…, x=1)`, or for a generic lambda
+    `operator()<solve()::<lambda(auto:23, int)> >(…) const (__closure=0x…, …)`; only a
+    lambda's call operator takes the `__closure` argument (a struct's takes `this`).
+    """
+    if "__closure=" in frame_text:
+        return model.lambda_name(line) if model is not None else "lambda"
+    return name
+
+
+def _parse_stack(text: str, model: SourceModel | None = None) -> list[dict[str, str | int]]:
     frames: list[dict[str, str | int]] = []
     # `args` keeps GDB's argument text so the recursion tree can label calls and tell
     # sibling calls at the same depth apart.
@@ -1286,7 +1322,7 @@ def _parse_stack(text: str) -> list[dict[str, str | int]]:
         match = pattern.search(line.strip())
         if match:
             frames.append({
-                "function": match.group(1).strip(),
+                "function": _frame_name(line, match.group(1).strip(), int(match.group(3)), model),
                 "line": int(match.group(3)),
                 "args": match.group(2).strip(),
             })
@@ -1341,7 +1377,14 @@ def _serialize_cpp_value(value: str, identity: str) -> dict[str, Any]:
         if string_object:
             return _string_value(string_object.group(1), bool(string_object.group(2)))
 
+    # `std::function<int(int)> fact = [&](int k) {...}`: the callable, not state.
+    if value.startswith("{") and "<std::_Function_base> = " in value:
+        return {"type": "function", "value": "function", "object_id": zlib.crc32(identity.encode("utf-8"))}
     truncated = False
+    # A clipped vector ends `}...@80`: its real size.
+    real_size = re.search(r"\}\.\.\.@(\d+)\Z", value)
+    if value.startswith("{") and real_size:
+        value = value[: real_size.start() + 1] + "..."
     if value.startswith("{") and value.endswith("}..."):
         value = value[:-3]
         truncated = True
@@ -1354,6 +1397,10 @@ def _serialize_cpp_value(value: str, identity: str) -> dict[str, Any]:
         truncated = truncated or len(all_parts) > MAX_VALUE_ITEMS
         parts = all_parts[:MAX_VALUE_ITEMS]
         object_id = zlib.crc32(identity.encode("utf-8"))
+        # std::array prints as its one member, `{_M_elems = {0, 2, 1, 0}}`: the plain array.
+        elements = re.match(r"_M_elems\s*=\s*(.*)\Z", parts[0], re.DOTALL) if len(parts) == 1 else None
+        if elements:
+            return _serialize_cpp_value(elements.group(1), identity)
         if parts and re.match(r"_M_(?:node|current|cur)\s*=", parts[0]):
             # An iterator holds only a pointer into its container.
             return {"type": "object", "class_name": "iterator", "object_id": object_id, "value": "position in a container"}
@@ -1365,6 +1412,10 @@ def _serialize_cpp_value(value: str, identity: str) -> dict[str, Any]:
             # allocator pointers, which are noise in a teaching view.
             return _opaque_container(object_id)
         named = [re.match(r"^([A-Za-z_]\w*)\s*=\s*(.*)$", part, re.DOTALL) for part in parts]
+        # A lambda is an object holding its captures, which GCC names `__n`, `__mp`
+        # (`[&]` captures print as bare addresses): program structure, not state.
+        if parts and all(match and match.group(1).startswith("__") for match in named):
+            return {"type": "function", "value": "lambda", "object_id": object_id}
         if parts and all(named):
             entries = [
                 {
@@ -1399,7 +1450,7 @@ def _serialize_cpp_value(value: str, identity: str) -> dict[str, Any]:
             "object_id": object_id,
             "items": items,
             **({"truncated": True} if truncated else {}),
-            **({"length": length} if unread_zero else {}),
+            **({"length": length} if unread_zero else {"length": int(real_size.group(1))} if real_size else {}),
             **({"fill": fill} if fill else {}),
         }
     string_match = re.search(r'"((?:\\.|[^"\\])*)"(\.\.\.)?$', value)
