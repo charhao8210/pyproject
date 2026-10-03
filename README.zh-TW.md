@@ -36,26 +36,66 @@ C++ 模式另外需要：
 
 ## 安裝教學
 
-### Windows：安裝 Python 模式
+### 第一步：先檢查目前環境
+
+Windows 請開啟 PowerShell；macOS 或 Linux 請開啟終端機。依序輸入：
+
+```text
+git --version
+python --version
+g++ --version
+gdb --version
+```
+
+macOS 或 Linux 如果找不到 `python`，再試一次：
+
+```text
+python3 --version
+```
+
+檢查結果的判斷方式：
+
+| 指令 | 什麼時候需要 | 正常結果 |
+| --- | --- | --- |
+| `git --version` | 使用 Git clone 下載時 | 顯示 Git 版本；若要下載 ZIP，可以沒有 Git |
+| `python --version` | 一定需要 | 必須是 Python 3.11 以上 |
+| `g++ --version` | 只有 C++ 模式需要 | 顯示 GNU g++ 版本 |
+| `gdb --version` | 只有 C++ 模式需要 | 顯示 GNU gdb 版本 |
+
+> [!IMPORTANT]
+> 只使用 Python 模式時，只要確認 Python 3.11 以上即可。`g++` 或 `gdb` 顯示「找不到指令」不會影響 Python 模式。
+
+### Windows：最簡單的安裝方式
 
 #### 1. 下載專案
 
-在 PowerShell 中執行：
+以下兩種方式選一種即可。
+
+**方法 A：使用 Git clone**
+
+適合已經可以執行 `git --version` 的使用者。在 PowerShell 輸入：
 
 ```powershell
 git clone https://github.com/charhao8210/pyproject.git
 cd pyproject
 ```
 
-如果你已經下載 ZIP，請先解壓縮，再於 PowerShell 使用 `cd` 進入包含 `README.md` 與 `requirements.txt` 的專案資料夾。
+**方法 B：下載 ZIP**
 
-#### 2. 確認 Python 版本
+1. 開啟 [GitHub 專案頁面](https://github.com/charhao8210/pyproject)。
+2. 按綠色 **Code** 按鈕。
+3. 選擇 **Download ZIP**。
+4. 將 ZIP 解壓縮。
+5. 進入解壓縮後的資料夾，確認裡面看得到 `README.md` 與 `requirements.txt`。
+6. 在檔案總管上方的路徑欄輸入 `powershell`，按 Enter。新的 PowerShell 會直接位於該資料夾。
+
+#### 2. 再確認 Python
 
 ```powershell
 python --version
 ```
 
-版本必須是 Python 3.11 以上。如果找不到 `python`，請先依照 [Python 官方 Windows 安裝說明](https://docs.python.org/3/using/windows.html) 安裝 Python，然後重新開啟 PowerShell。
+如果顯示 Python 3.11、3.12、3.13 或更新版本，就可以繼續。如果找不到 `python` 或版本低於 3.11，請先依照 [Python 官方 Windows 安裝說明](https://docs.python.org/3/using/windows.html) 安裝新版 Python，完成後關閉並重新開啟 PowerShell。
 
 #### 3. 建立虛擬環境
 
@@ -65,35 +105,17 @@ python -m venv .venv
 
 虛擬環境會把本專案的套件與電腦上其他 Python 專案分開。
 
-#### 4. 啟用虛擬環境
-
-```powershell
-.\.venv\Scripts\Activate.ps1
-```
-
-成功後，命令列開頭通常會出現 `(.venv)`。
-
-如果 PowerShell 阻擋啟用腳本，不必修改整台電腦的執行原則；可以跳過啟用，直接使用虛擬環境中的 Python：
+#### 4. 安裝套件
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install --upgrade pip
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+```
+
+#### 5. 啟動程式
+
+```powershell
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --reload
-```
-
-#### 5. 安裝 Python 套件
-
-已啟用虛擬環境時執行：
-
-```powershell
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
-```
-
-#### 6. 啟動程式
-
-```powershell
-python -m uvicorn app.main:app --reload
 ```
 
 看到 Uvicorn 啟動訊息後，使用瀏覽器開啟：
@@ -102,9 +124,32 @@ python -m uvicorn app.main:app --reload
 
 結束伺服器時，在 PowerShell 按 `Ctrl+C`。
 
+上面的做法不需要啟用虛擬環境，因此不會遇到 PowerShell 阻擋 `Activate.ps1` 的問題。下次要使用時，只需要進入專案資料夾，再執行第 5 步的啟動指令。
+
 ### Windows：啟用 C++ 模式
 
-Windows 建議使用 MSYS2 的 UCRT64 工具鏈。以下步驟只在你需要執行 C++ 程式時才需要。
+以下步驟只在你需要執行 C++ 程式時才需要。
+
+先在 PowerShell 檢查：
+
+```powershell
+g++ --version
+gdb --version
+```
+
+如果兩個指令都能顯示版本，代表電腦已經有可用的工具鏈，請先直接啟動專案測試，**不需要另外安裝 MSYS2**。
+
+如果其中一個指令找不到，Windows 建議使用 MSYS2 安裝 GNU 工具鏈。
+
+#### 為什麼需要 MSYS2？
+
+Windows 本身沒有內建 GNU `g++` 與 `gdb`。本專案的 C++ 模式會：
+
+1. 使用 `g++` 將貼上的 C++17 程式編譯成暫存執行檔。
+2. 使用 `gdb` 逐行執行程式並讀取變數。
+3. 將 GDB 結果轉換成網頁上的視覺化步驟。
+
+MSYS2 只是取得這兩個工具的簡單方法，不是專案執行時的特殊伺服器，也不是 Python 模式的必要套件。其他 GNU／MinGW 工具鏈只要能讓 `g++` 與 `gdb` 從 PATH 直接執行，也可以使用。
 
 #### 1. 安裝 MSYS2
 
@@ -153,23 +198,28 @@ $env:Path = "C:\msys64\ucrt64\bin;$env:Path"
 
 ### Ubuntu／Debian Linux
 
-先安裝 Python 與 GNU C++ 工具鏈：
+Python 模式先安裝基本工具：
 
 ```bash
 sudo apt update
-sudo apt install python3 python3-venv python3-pip g++ gdb git
+sudo apt install python3 python3-venv python3-pip git
 ```
 
-接著下載並啟動專案：
+如果還要使用 C++ 模式，再安裝：
+
+```bash
+sudo apt install g++ gdb
+```
+
+接著下載、安裝並啟動專案：
 
 ```bash
 git clone https://github.com/charhao8210/pyproject.git
 cd pyproject
 python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
-python -m uvicorn app.main:app --reload
+.venv/bin/python -m pip install --upgrade pip
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python -m uvicorn app.main:app --reload
 ```
 
 最後開啟 <http://127.0.0.1:8000>。
@@ -182,10 +232,9 @@ Python 模式的安裝方式：
 git clone https://github.com/charhao8210/pyproject.git
 cd pyproject
 python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
-python -m uvicorn app.main:app --reload
+.venv/bin/python -m pip install --upgrade pip
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python -m uvicorn app.main:app --reload
 ```
 
 macOS 內建的 `g++` 通常實際上是 Clang，使用的是 libc++；本專案目前的 C++ 變數解析依賴 GNU GDB 與 libstdc++ 內部結構，因此 macOS 的 C++ 模式不屬於直接支援的安裝方式。建議在 macOS 使用 Python 模式，或改在具備 GNU `g++`／`gdb` 的 Linux 環境執行 C++ 模式。
