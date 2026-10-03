@@ -155,7 +155,9 @@ def analyze_execution(
         step["usage"] = usage[index]
         step["loop"] = loops[index]
         step["inputs"] = inputs[index]
+        input_names = {entry["name"] for entry in inputs[index]}
         visualization = _carry(AUTO_VIEW, _visualization_for(profile, scope, step, extents), last_ready, step)
+        _drop_input_readouts(visualization, input_names)
         _mark_writes(visualization, previous.get(AUTO_VIEW))
         previous[AUTO_VIEW] = visualization
         step["visualization"] = visualization
@@ -165,6 +167,7 @@ def analyze_execution(
             recursion_state = recursion_steps[index] if recursion_steps else None
             model = _view_model(view, profile, scope, step, recursion_state, language, extents)
             model = _carry(view["id"], model, last_ready, step)
+            _drop_input_readouts(model, input_names)
             _mark_writes(model, previous.get(view["id"]))
             previous[view["id"]] = model
             views[view["id"]] = model
@@ -204,7 +207,24 @@ def analyze_execution(
     return result
 
 
-GENERIC_ARRAY_PROFILES = ("Comparison-based array algorithm", "Array iteration")
+def _drop_input_readouts(model: dict[str, Any], input_names: set[str]) -> None:
+    """Input values (`n`, `k`) are shown once in the input row, not again as a view's readout."""
+    readouts = model.get("readouts")
+    if not readouts or not input_names:
+        return
+    dropped = {readout["label"] for readout in readouts} & input_names
+    if not dropped:
+        return
+    kept = [readout for readout in readouts if readout["label"] not in dropped]
+    if kept:
+        model["readouts"] = kept
+    else:
+        del model["readouts"]
+    # No longer drawn by the view, so the input row shows it.
+    model["uses"] = [name for name in model.get("uses", []) if name not in dropped]
+
+
+GENERIC_ARRAY_PROFILES =("Comparison-based array algorithm", "Array iteration")
 DP_LIKE_NAMES = frozenset({"dp", "memo", "can", "ways", "f", "best", "reach", "reachable", "possible", "ok"})
 _SUBSCRIPT_WRITE = re.compile(
     r"\b([A-Za-z_]\w*)\s*(?:\[(?:[^\[\]]|\[[^\[\]]*\])*\]\s*)+"

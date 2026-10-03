@@ -1053,9 +1053,20 @@ h2 {
     color: var(--write);
 }
 
+/* A variable shown for the first time in the trace: the whole row or card is tinted blue. */
+.scalar-row.is-new,
+.variable-card.is-new {
+    background: color-mix(in srgb, var(--ink) 20%, transparent);
+}
+
 /* `7 -> 10` on a single value the last line changed; the old value is the faint one. */
 .change-before {
     color: var(--pencil-faint);
+}
+
+.change-formula {
+    color: var(--pencil-muted);
+    white-space: pre;
 }
 
 .change-arrow {
@@ -1510,7 +1521,7 @@ h2 {
     display: flex;
     flex: 0 0 auto;
     flex-wrap: wrap;
-    justify-content: flex-end;
+    justify-content: flex-start;
     gap: 6px 16px;
     padding: 6px 16px;
     border-bottom: 1px solid var(--rule-faint);

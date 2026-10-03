@@ -337,7 +337,9 @@ int main() {
     assert ready[-1]["labels"] == [4, 1, 3, 2]
     windows = [view for view in ready if view.get("interval")]
     assert windows and {marker["label"] for marker in windows[-1]["markers"]} >= {"i", "l", "r"}
-    assert {"label": "x", "value": 8} in windows[-1]["readouts"]
+    # The target is an input value: drawn once in the input row, not again as a readout.
+    assert "x" not in {readout["label"] for readout in windows[-1]["readouts"]}
+    assert {"name": "x", "value": 8, "read": True} in result["steps"][-1]["inputs"]
     assert any(readout["label"] == "s" for readout in windows[-1]["readouts"])
 
 

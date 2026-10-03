@@ -146,7 +146,7 @@ def run_cpp_debugger(
             workdir = Path(directory)
             source_path = workdir / CPP_FILENAME
             executable_path = workdir / EXECUTABLE_NAME
-            source_path.write_text(source, encoding="utf-8")
+            source_path.write_text(_debuggable_source(source), encoding="utf-8")
             (workdir / PRELUDE_FILENAME).write_text(UNBUFFERED_OUTPUT_PRELUDE, encoding="utf-8")
             (workdir / "input.txt").write_text(stdin_text, encoding="utf-8")
 
@@ -228,6 +228,17 @@ def run_cpp_debugger(
     }
     result["algorithm"] = analyze_execution(source, steps, language="cpp")
     return result
+
+
+def _debuggable_source(source: str) -> str:
+    """Drop optimisation requests that override `-O0`, keeping every line where it was.
+
+    Contest code often starts with `#pragma GCC optimize("O3")`: the compiled program then
+    keeps variables in registers (`mid` vanishes, `flag` reads garbage) and runs its lines out
+    of order, so the trace stops making sense.
+    """
+    source = re.sub(r"^[ \t]*#[ \t]*pragma[ \t]+GCC[ \t]+optimize\b.*$", "", source, flags=re.MULTILINE)
+    return re.sub(r"__attribute__\s*\(\(\s*optimize\s*\([^()]*\)\s*\)\)", "", source)
 
 
 def _compile_source(

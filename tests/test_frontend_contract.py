@@ -282,3 +282,26 @@ def test_variables_show_old_to_new_values_and_tint_changed_cells() -> None:
     assert 'textSpan("->", "change-arrow")' in script
     assert "step.usage?.next" in script and "step.usage?.cells" in script
     assert "is-changed-cell" in script and ".table-cell.is-changed-cell" in style
+
+
+def test_new_variables_are_tinted() -> None:
+    script = Path("app/static/app.js").read_text(encoding="utf-8")
+    style = Path("app/static/style.css").read_text(encoding="utf-8")
+
+    assert "step.usage?.new" in script and 'card.classList.toggle("is-new"' in script
+    assert "step.usage?.appearing" in script
+    assert ".scalar-row.is-new" in style and ".variable-card.is-new" in style
+
+
+def test_assignments_show_their_formula() -> None:
+    script = Path("app/static/app.js").read_text(encoding="utf-8")
+
+    assert "function formulaText(" in script and "step.usage?.formula" in script
+    # Substituted forms holding a number of 10^6 or more are left out.
+    assert r"/\d{7,}/.test(substituted)" in script
+
+
+def test_large_integers_render_from_their_exact_text() -> None:
+    script = Path("app/static/app.js").read_text(encoding="utf-8")
+
+    assert "function numberText(" in script and "value.text ?? String(value.value)" in script

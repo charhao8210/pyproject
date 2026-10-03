@@ -41,14 +41,37 @@ async def index(request: Request) -> HTMLResponse:
     return response
 
 
+JS_SAFE_INTEGER = 2**53 - 1
+
+
+def _mark_large_integers(value: object, seen: set[int] | None = None) -> None:
+    """Give every `value` beyond 2^53 an exact `text`: JSON numbers that large reach the
+    browser rounded (`500000000000000003` arrived as `500000000000000000`)."""
+    seen = set() if seen is None else seen
+    if not isinstance(value, (dict, list)) or id(value) in seen:
+        return
+    seen.add(id(value))
+    if isinstance(value, dict):
+        number = value.get("value")
+        if isinstance(number, int) and not isinstance(number, bool) and abs(number) > JS_SAFE_INTEGER:
+            value["text"] = str(number)
+        children = value.values()
+    else:
+        children = value
+    for child in children:
+        _mark_large_integers(child, seen)
+
+
 @app.post("/api/debug", response_model=DebugResponse)
 def debug_code(payload: DebugRequest) -> dict:
     try:
-        return run_debugger(
+        result = run_debugger(
             payload.code,
             stdin_text=payload.stdin,
             language=payload.language,
         )
+        _mark_large_integers(result)
+        return result
     except SourceValidationError as error:
         raise HTTPException(
             status_code=422,

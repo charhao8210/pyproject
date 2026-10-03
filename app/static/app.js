@@ -840,7 +840,7 @@ function renderInputs(step, visualization) {
     const read = (step.inputs || []).filter((entry) => entry.read && !drawn.has(entry.name));
     const onLine = new Set(step.usage?.line || []);
     elements.algorithmInputs.replaceChildren(...read.map((entry) => {
-        const item = textSpan(`${entry.name} = ${entry.value}`, "algorithm-readout");
+        const item = textSpan(`${entry.name} = ${numberText(entry)}`, "algorithm-readout");
         item.classList.toggle("is-on-line", onLine.has(entry.name));
         return item;
     }));
@@ -850,11 +850,19 @@ function renderInputs(step, visualization) {
 function renderVariables(step, visualization) {
     const onLine = new Set(step.usage?.line || []);
     const changed = new Set(step.usage?.changed || []);
+    const appeared = new Set(step.usage?.new || []);
     // What the highlighted line is about to do: the value it will leave, the entries it will write.
     const upcoming = step.usage?.next || {};
     const upcomingCells = step.usage?.cells || {};
+    const formulas = step.usage?.formula || {};
     const hidden = new Set([...(visualization?.uses || []).map(String), ...inputNames(step)]);
-    const entries = variableEntries(step.locals || {}, step.globals || {}, hidden);
+    // Variables the highlighted line creates are listed already, with the value they will get.
+    const locals = {...(step.locals || {})};
+    const globals = {...(step.globals || {})};
+    Object.entries(step.usage?.appearing || {}).forEach(([name, entry]) => {
+        (entry.global ? globals : locals)[name] = entry.value;
+    });
+    const entries = variableEntries(locals, globals, hidden);
     elements.variables.replaceChildren();
     elements.variables.className = "panel-body";
     if (!entries.length) {
@@ -883,6 +891,8 @@ function renderVariables(step, visualization) {
         // Yellow: used by the line about to run. Orange: changed by the line that just ran.
         card.classList.toggle("is-on-line", onLine.has(name));
         card.classList.toggle("is-changed", changed.has(name));
+        // Blue: shown for the first time in this trace.
+        card.classList.toggle("is-new", appeared.has(name));
         const nameNode = textSpan(name, "variable-label");
         const hint = isScalar ? "" : CONTAINER_HINTS[value?.class_name] || "";
         const type = textSpan(
@@ -891,11 +901,18 @@ function renderVariables(step, visualization) {
         );
         const content = document.createElement("div");
         content.className = "value-view";
+        const formula = isScalar ? formulaText(formulas[name], Object.hasOwn(upcoming, name) ? upcoming[name] : value) : "";
         if (isScalar && Object.hasOwn(upcoming, name)) {
-            // On the line that changes it: `7 -> 10`, the value now and the one it will have.
+            // On the line that changes it: `7 -> mid+1 = 7+1 = 8`, the value now, how the line
+            // computes the next one, and that value.
             const before = renderValue(value, 0);
             before.classList.add("change-before");
-            content.append(before, textSpan("->", "change-arrow"), renderValue(upcoming[name], 0));
+            content.append(before, textSpan("->", "change-arrow"));
+            if (formula) content.append(textSpan(formula, "change-formula"));
+            content.append(renderValue(upcoming[name], 0));
+        } else if (formula) {
+            // A variable the line creates: `l = ma = 7`.
+            content.append(textSpan(formula, "change-formula"), renderValue(value, 0));
         } else {
             content.append(renderValue(value, 0, upcomingCells[name]));
         }
@@ -915,6 +932,18 @@ function renderVariables(step, visualization) {
     zones.classList.toggle("is-split", zones.childElementCount === 2);
     elements.variables.classList.add("has-zones");
     elements.variables.append(zones);
+}
+
+// `mid+1 = 7+1 = ` in front of the value a line assigns. A bare number (`ma = 0`, `r = 1e18`)
+// shows only the result, and the substituted form is left out when it adds nothing or holds a
+// number of 10^6 or more (`(7+1000000000000000000)/2` is unreadable; the user's choice).
+function formulaText(formula, result) {
+    if (!formula || /^[-+]?[\d.][\w.']*$/.test(formula.expression.trim())) return "";
+    const parts = [formula.expression];
+    const resultText = compactValue(result);
+    const substituted = formula.substituted;
+    if (substituted !== formula.expression && substituted !== resultText && !/\d{7,}/.test(substituted)) parts.push(substituted);
+    return `${parts.join(" = ")} = `;
 }
 
 // Which end of a decoded C++ container is which.
@@ -981,7 +1010,7 @@ function renderValue(value, depth, changes = null) {
         return textSpan(JSON.stringify(value.value) + truncatedSuffix(value), "primitive str");
     }
     if (["int", "float"].includes(value.type)) {
-        return textSpan(String(value.value), "primitive number");
+        return textSpan(numberText(value), "primitive number");
     }
     if (value.type === "bool") {
         return textSpan(value.value ? "True" : "False", "primitive bool");
@@ -1135,12 +1164,17 @@ function displayType(value) {
     return value?.class_name || value?.type || "unknown";
 }
 
+// Integers beyond 2^53 lose digits as JSON numbers; the server adds their exact `text`.
+function numberText(value) {
+    return value.text ?? String(value.value);
+}
+
 function compactValue(value, depth = 0) {
     if (!value) return "—";
     if (value.type === "reference") return `↪ ${objectLabel(value.object_id)}`;
     if (value.type === "str") return JSON.stringify(value.value.length > 18 ? `${value.value.slice(0, 18)}…` : value.value);
     if (value.type === "none") return "None";
-    if (["int", "float"].includes(value.type)) return String(value.value);
+    if (["int", "float"].includes(value.type)) return numberText(value);
     if (value.type === "bool") return value.value ? "True" : "False";
     if (depth > 0 && containerTypes.has(value.type)) return objectLabel(value.object_id);
     if (["list", "tuple", "set", "frozenset"].includes(value.type)) {
@@ -1537,7 +1571,7 @@ function indexedViewMeta(view, count) {
         view.readouts.forEach((readout) => {
             const item = document.createElement("span");
             item.className = "algorithm-readout";
-            item.textContent = `${readout.label} = ${readout.value}`;
+            item.textContent = `${readout.label} = ${numberText(readout)}`;
             readouts.append(item);
         });
         details.append(readouts);

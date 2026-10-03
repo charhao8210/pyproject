@@ -301,3 +301,110 @@ def test_each_line_carries_the_values_and_cells_it_will_change() -> None:
     assert usage[6]["cells"]["g"] == {"items": [1], "cells": [[1, 0]]}
     assert usage[8]["cells"]["s"]["items"] == [1] and "s" not in usage[8]["next"]
     assert usage[5]["next"] == {} and usage[9]["cells"] == {}
+
+
+@requires_cpp
+def test_optimize_pragmas_do_not_hide_variables() -> None:
+    from app.cpp_runner import _debuggable_source
+
+    source = (
+        "#include <bits/stdc++.h>\n"
+        "#pragma GCC optimize(\"O3\")\n"
+        "using namespace std;\n"
+        "int main() {\n"
+        "    long long l = 1, r = 100;\n"
+        "    while (l <= r) {\n"
+        "        long long mid = (l + r) / 2;\n"
+        "        if (mid > 30) r = mid - 1; else l = mid + 1;\n"
+        "    }\n"
+        "    cout << l;\n"
+        "}\n"
+    )
+    # Line numbers stay put.
+    assert _debuggable_source(source).count("\n") == source.count("\n")
+    steps = run_debugger(source, language="cpp")["steps"]
+    lines = [step["line"] for step in steps]
+    assert lines[:4] == [5, 6, 7, 8]
+    assert any(step["locals"].get("mid", {}).get("value") == 50 for step in steps)
+
+
+def test_input_values_are_not_repeated_as_view_readouts() -> None:
+    result = run_debugger(
+        "n, k = map(int, input().split())\n"
+        "a = list(map(int, input().split()))\n"
+        "lo, hi = 0, n - 1\n"
+        "while lo <= hi:\n"
+        "    mid = (lo + hi) // 2\n"
+        "    if a[mid] < k:\n"
+        "        lo = mid + 1\n"
+        "    else:\n"
+        "        hi = mid - 1\n"
+        "print(lo)\n",
+        stdin_text="5 7\n1 3 7 9 11\n",
+    )
+
+    assert result["algorithm"]["kind"] == "binary_search"
+    for step in result["steps"]:
+        labels = {readout["label"] for readout in step["visualization"].get("readouts", [])}
+        assert "k" not in labels and "k" not in step["visualization"].get("uses", [])
+    assert any(entry["name"] == "k" and entry["read"] for entry in result["steps"][-1]["inputs"])
+
+
+def test_only_a_variables_first_appearance_is_new() -> None:
+    result = run_debugger(
+        "def f(x):\n"
+        "    y = x + 1\n"
+        "    return y\n"
+        "total = 0\n"
+        "for i in range(2):\n"
+        "    mid = i\n"
+        "    total += f(mid)\n"
+    )
+    new = [(step["line"], step["function"], step["usage"]["new"]) for step in result["steps"]]
+    firsts = [name for _, _, names in new for name in names]
+
+    # Each name (per function) is new exactly once, though `mid` is assigned and `f` called twice.
+    assert sorted(firsts) == sorted(set(firsts))
+    assert {"mid", "x", "y", "total", "i"} <= set(firsts)
+    # `mid = i` creates mid, so mid is new on the step showing that line, not one step later.
+    mid_line = next(step for step in result["steps"] if step["line"] == 6)
+    assert "mid" in mid_line["usage"]["new"] and mid_line["usage"]["appearing"]["mid"]["value"]["value"] == 0
+
+
+def test_assignment_formulas_name_where_a_value_comes_from() -> None:
+    from app.usage import assignment_formula
+
+    scope = {"ma": 7, "l": 7, "r": 10**18, "a": [2, 4, 7], "i": 2, "sum": 6, "g": [[0, 0], [0, 5]]}
+
+    assert assignment_formula("int l=ma,r=1e18;", "l", scope, "cpp") == {"expression": "ma", "substituted": "7"}
+    assert assignment_formula("int mid=(l+r)/2;", "mid", scope, "cpp")["expression"] == "(l+r)/2"
+    assert assignment_formula("sum+=a[i];", "sum", scope, "cpp") == {"expression": "sum+a[i]", "substituted": "6+7"}
+    assert assignment_formula("flag++;", "flag", scope, "cpp") == {"expression": "flag+1", "substituted": "flag+1"}
+    assert assignment_formula("x = g[1][i-1] + a[a[0]]", "x", scope, "python")["substituted"] == "5 + 7"
+    # A loop header assigns i twice, and a comparison assigns nothing.
+    assert assignment_formula("for(int i=0;i<n;i++){", "i", scope, "cpp") is None
+    assert assignment_formula("if(l<=r)", "l", scope, "cpp") is None
+
+
+def test_a_declared_value_carries_its_formula_on_the_line_that_declares_it() -> None:
+    result = run_debugger("ma = 7\nl = ma\nl = l + 2\ndone = 0\n")
+    by_line = {}
+    for step in result["steps"]:
+        by_line.setdefault(step["line"], step["usage"])
+
+    assert by_line[2]["appearing"]["l"]["value"]["value"] == 7
+    assert by_line[2]["formula"]["l"] == {"expression": "ma", "substituted": "7"}
+    assert by_line[3]["next"]["l"]["value"] == 9
+    assert by_line[3]["formula"]["l"] == {"expression": "l + 2", "substituted": "7 + 2"}
+
+
+def test_integers_beyond_javascript_precision_carry_exact_text() -> None:
+    from app.main import _mark_large_integers
+
+    shared = {"type": "int", "value": 500000000000000003}
+    result = {"steps": [{"locals": {"mid": shared, "n": {"type": "int", "value": 5}}}], "inputs": [{"name": "r", "value": 10**18}]}
+    _mark_large_integers(result)
+
+    assert shared["text"] == "500000000000000003"
+    assert "text" not in result["steps"][0]["locals"]["n"]
+    assert result["inputs"][0]["text"] == "1000000000000000000"
