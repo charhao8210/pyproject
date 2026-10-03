@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="zh-Hant" data-theme="dark">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Step through Python and C++ execution, variables, and object references.">
+    <title>Code Visual Debugger</title>
+    <link rel="icon" href="{{ url_for('static', path='/favicon.svg') }}" type="image/svg+xml">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Mono:wght@400;700&family=Atkinson+Hyperlegible+Next:wght@400;500;700&display=swap">
+    <link rel="stylesheet" href="{{ url_for('static', path='/style.css') }}?v={{ asset_version }}">
+    <script>
+        // Apply the saved theme before first paint so the page does not flash.
+        try {
+            const savedTheme = localStorage.getItem("code-visual-debugger:theme");
+            if (savedTheme === "light" || savedTheme === "dark") document.documentElement.dataset.theme = savedTheme;
+        } catch (_error) {
+            // Storage can be unavailable in privacy-restricted browser contexts.
+        }
+    </script>
+    <script defer src="{{ url_for('static', path='/highlight.js') }}?v={{ asset_version }}"></script>
+    <script defer src="{{ url_for('static', path='/app.js') }}?v={{ asset_version }}"></script>
+</head>
+<body>
+    <div class="app-shell">
+        <header class="app-header">
+            <div class="brand">
+                <svg class="brand-mark" viewBox="0 0 40 40" aria-hidden="true">
+                    <path class="brand-mark-margin" d="M7 4v32"/>
+                    <rect class="brand-mark-highlight" x="10" y="16" width="26" height="9" rx="2" transform="rotate(-3 23 20.5)"/>
+                    <path class="brand-mark-lines" d="M13 11h16M13 20.5h20M13 30h12"/>
+                </svg>
+                <div>
+                    <h1>Code Visual Debugger</h1>
+                    <p>Run a program, then step through it one line at a time.</p>
+                </div>
+            </div>
+            <div class="header-actions">
+                <label class="language-control" for="language-select">
+                    <span>Language</span>
+                    <select id="language-select" aria-label="Programming language">
+                        <option value="python" selected>Python</option>
+                        <option value="cpp">C++</option>
+                    </select>
+                </label>
+                <span id="run-status" class="status-pill idle"><span class="status-dot"></span>Ready</span>
+                <button id="theme-button" class="button secondary" type="button">Light theme</button>
+                <button id="edit-button" class="button secondary hidden" type="button">Edit code</button>
+                <button id="run-button" class="button primary" type="button">
+                    <span class="run-icon" aria-hidden="true">▶</span>
+                    Run
+                </button>
+            </div>
+        </header>
+
+        <main>
+            <section id="message" class="message hidden" role="alert"></section>
+
+            <div id="workspace" class="workspace-grid">
+                <div id="left-column" class="left-column">
+                    <section class="panel source-panel" data-panel="source">
+                        <div class="panel-header">
+                            <h2>Source code</h2>
+                            <div class="panel-tools">
+                                <span id="current-location" class="panel-meta">Not running</span>
+                                <button class="panel-action panel-toggle" type="button" aria-expanded="true" aria-controls="source-body">Hide</button>
+                            </div>
+                        </div>
+                        <div id="source-body" class="source-workspace">
+                            <div id="editor-wrap" class="editor-wrap">
+                                <pre id="editor-highlight" class="editor-highlight" aria-hidden="true"></pre>
+                                <div id="editor-gutter" class="editor-gutter" aria-hidden="true"></div>
+                                <textarea id="code-editor" aria-label="Source code" spellcheck="false" wrap="off">import sys
+
+def main():
+    data = sys.stdin.read().split()
+    n, m = int(data[0]), int(data[1])
+    chars = "".join(data[2:])
+    a = [chars[i * m:(i + 1) * m] for i in range(n)]
+
+    vis = [[False] * m for _ in range(n)]
+    dirs = ((1, 0), (-1, 0), (0, 1), (0, -1))
+    ans = 0
+
+    for i in range(n):
+        for j in range(m):
+            if not vis[i][j] and a[i][j] != '#':
+                ans += 1
+                vis[i][j] = True
+                stack = [(i, j)]
+
+                while stack:
+                    c, r = stack.pop()
+                    for dc, dr in dirs:
+                        wc, wr = c + dc, r + dr
+                        if 0 &lt;= wc &lt; n and 0 &lt;= wr &lt; m and not vis[wc][wr] and a[wc][wr] != '#':
+                            vis[wc][wr] = True
+                            stack.append((wc, wr))
+    print(ans)
+
+main()</textarea>
+                            </div>
+                            <div id="source-viewer" class="source-viewer hidden" aria-label="Executed source code"></div>
+                        </div>
+                    </section>
+
+                    <section class="panel stdin-panel" data-panel="stdin">
+                        <div class="panel-header">
+                            <h2>Test data <span class="panel-subtitle">stdin</span></h2>
+                            <div class="panel-tools">
+                                <span id="stdin-count" class="panel-meta">48 chars</span>
+                                <button class="panel-action panel-toggle" type="button" aria-expanded="true" aria-controls="stdin-body">Hide</button>
+                            </div>
+                        </div>
+                        <div id="stdin-body" class="stdin-body">
+                            <textarea id="stdin-editor" aria-label="Standard input test data" spellcheck="false" placeholder="The text supplied to input() or sys.stdin…">5 7
+..#....
+..#..#.
+..#..#.
+.....#.
+###....</textarea>
+                        </div>
+                    </section>
+                </div>
+
+                <div id="column-resizer" class="column-resizer" role="separator" aria-orientation="vertical" aria-label="Resize code and visualization columns" tabindex="0" title="Drag to resize. Double-click to reset."></div>
+
+                <div id="right-column" class="right-column">
+                    <section class="panel algorithm-panel" data-panel="algorithm">
+                        <div class="panel-header algorithm-header">
+                            <h2 id="algorithm-name">Algorithm</h2>
+                            <div class="algorithm-summary">
+                                <label class="view-control" for="view-select">
+                                    <span>View</span>
+                                    <select id="view-select" aria-label="Visualization" disabled>
+                                        <option value="auto">Auto</option>
+                                    </select>
+                                </label>
+                                <select id="view-variable-select" class="view-variable-select" aria-label="Variable to draw" hidden></select>
+                                <span id="algorithm-confidence" class="confidence-badge">Not analyzed</span>
+                                <span id="algorithm-evidence" class="panel-meta">Run code to detect its structure</span>
+                                <button class="panel-action panel-toggle" type="button" aria-expanded="true" aria-controls="algorithm-view">Hide</button>
+                            </div>
+                        </div>
+                        <div id="algorithm-inputs" class="algorithm-inputs" aria-label="Input values" hidden></div>
+                        <div id="algorithm-view" class="algorithm-canvas empty-state">
+                            Run the program to see its data structure drawn here.
+                        </div>
+                    </section>
+
+                    <div class="row-resizer" role="separator" aria-orientation="horizontal" aria-label="Resize visualization and variables" tabindex="0" title="Drag to resize. Double-click to reset."></div>
+
+                    <section class="panel variables-panel" data-panel="variables">
+                        <div class="panel-header">
+                            <h2>Variables</h2>
+                            <div class="panel-tools">
+                                <span class="usage-legend">
+                                    <span class="usage-swatch on-line" aria-hidden="true"></span>Used on this line
+                                    <span class="usage-swatch changed" aria-hidden="true"></span>Changed by the last line
+                                </span>
+                                <span id="function-name" class="panel-meta">—</span>
+                                <button class="panel-action panel-toggle" type="button" aria-expanded="true" aria-controls="variables">Hide</button>
+                            </div>
+                        </div>
+                        <div id="variables" class="panel-body empty-state">
+                            Run the program to inspect variables.
+                        </div>
+                    </section>
+
+                    <div class="row-resizer" role="separator" aria-orientation="horizontal" aria-label="Resize variables and stdout" tabindex="0" title="Drag to resize. Double-click to reset."></div>
+
+                    <section class="panel output-panel" data-panel="stdout">
+                        <div class="panel-header">
+                            <h2>stdout</h2>
+                            <div class="panel-tools">
+                                <button class="panel-action panel-toggle" type="button" aria-expanded="true" aria-controls="stdout">Hide</button>
+                            </div>
+                        </div>
+                        <pre id="stdout" class="output-content"><span class="output-placeholder">Program output appears here.</span></pre>
+                    </section>
+                </div>
+            </div>
+        </main>
+
+        <footer class="timeline" aria-label="Execution timeline">
+            <div class="timeline-buttons">
+                <button id="loop-start-button" class="icon-button" type="button" disabled title="Back to before this loop" aria-label="Back to before this loop">|‹</button>
+                <button id="previous-button" class="icon-button" type="button" disabled title="Previous step" aria-label="Previous step">‹</button>
+            </div>
+            <div class="playback-controls">
+                <button id="play-button" class="button secondary play-button" type="button" disabled aria-pressed="false">
+                    <span class="play-icon" aria-hidden="true">▶</span>
+                    <span class="play-label">Play</span>
+                </button>
+                <select id="speed-select" class="speed-select" aria-label="Playback speed">
+                    <option value="0.25">0.25×</option>
+                    <option value="0.5">0.5×</option>
+                    <option value="1" selected>1×</option>
+                    <option value="1.5">1.5×</option>
+                    <option value="1.75">1.75×</option>
+                    <option value="2">2×</option>
+                </select>
+            </div>
+            <div class="timeline-center">
+                <div class="timeline-labels">
+                    <span id="step-label">No trace</span>
+                    <span id="event-label" class="event-badge">—</span>
+                </div>
+                <input id="step-slider" type="range" min="0" max="0" value="0" disabled aria-label="Execution step">
+            </div>
+            <div class="timeline-buttons">
+                <button id="next-button" class="icon-button" type="button" disabled title="Next step" aria-label="Next step">›</button>
+                <button id="loop-end-button" class="icon-button" type="button" disabled title="Skip to after this loop" aria-label="Skip to after this loop">›|</button>
+            </div>
+            <span class="keyboard-hint"><kbd>←</kbd><kbd>→</kbd> step, <kbd>Space</kbd> play</span>
+        </footer>
+    </div>
+</body>
+</html>

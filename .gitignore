@@ -1,0 +1,21 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+.idea/
+.vscode/
+.DS_Store
+
+# Local AI-assistant files and private work records
+.claude/
+.codex/
+.agents/
+CLAUDE.md
+PROJECT_STATUS_FOR_CLAUDE.md
+progress.md
+run.ps1
+claude-log.txt

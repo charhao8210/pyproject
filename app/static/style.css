@@ -1,0 +1,2038 @@
+/*
+ * Trace sheet: the page is the sheet a student hand-traces code on, in graphite (dark) or paper (light).
+ * Highlighter yellow means "now" (current line, cell, node, step) and nothing else.
+ * Blue ink means "refers to the same object" and nothing else.
+ * Red pen marks errors and the notebook margin.
+ */
+:root {
+    color-scheme: dark;
+    --paper: #171a19;
+    --sheet: #1f2321;
+    --sheet-raised: #272c2a;
+    --rule: #363d39;
+    --rule-faint: #2a302d;
+    --pencil: #e6eae4;
+    --pencil-muted: #aab3ad;
+    --pencil-faint: #8a948e;
+    --wall: #4b544f;
+    --wall-text: #d3d9d4;
+    --highlighter: #f2dc52;
+    --on-highlighter: #1b1f1d;
+    --ink: #8ea8f5;
+    --red: #ff7d6e;
+    --red-text: #ffb3a8;
+    --margin: #6e3631;
+    --string: #e2b878;
+    --node-visited: #3b4440;
+    --primary-hover: #ffffff;
+    --visited-bg: #33473c;
+    --visited-mark: #a6e3a1;
+    --write: #fab387;
+    --tle: #ffb86c;
+    --bar-fill: #3b4440;
+    --bar-strong: #66716b;
+
+    /* Catppuccin Mocha token colors */
+    --syn-text: #cdd6f4;
+    --syn-keyword: #cba6f7;
+    --syn-string: #a6e3a1;
+    --syn-number: #fab387;
+    --syn-comment: #9399b2;
+    --syn-function: #89b4fa;
+    --syn-type: #f9e2af;
+    --syn-self: #f38ba8;
+    --syn-operator: #89dceb;
+    --syn-punct: #9399b2;
+    --syn-selection: rgba(137, 180, 250, 0.3);
+
+    --grid-lines:
+        linear-gradient(to right, var(--rule-faint) 1px, transparent 1px) 0 0 / 20px 20px,
+        linear-gradient(to bottom, var(--rule-faint) 1px, transparent 1px) 0 0 / 20px 20px;
+    --radius: 3px;
+    --line: 26px;
+    --gutter: 52px;
+    --mono: "Atkinson Hyperlegible Mono", "Cascadia Code", Consolas, "Microsoft JhengHei", monospace;
+    --sans: "Atkinson Hyperlegible Next", "Segoe UI", "Microsoft JhengHei", system-ui, sans-serif;
+}
+
+:root[data-theme="light"] {
+    color-scheme: light;
+    --paper: #edf2e9;
+    --sheet: #f8faf5;
+    --sheet-raised: #fdfefc;
+    --rule: #c9d6c4;
+    --rule-faint: #dfe7da;
+    --pencil: #2e3430;
+    --pencil-muted: #58625c;
+    --pencil-faint: #6e7972;
+    --wall: #5b6460;
+    --wall-text: #f8faf5;
+    --highlighter: #f5e15a;
+    --on-highlighter: #2e3430;
+    --ink: #2f4fa0;
+    --red: #c23b2e;
+    --red-text: #8f2a20;
+    --margin: #e3a39b;
+    --string: #7a4b12;
+    --node-visited: #d3dccf;
+    --primary-hover: #454d48;
+    --visited-bg: #d4e8cc;
+    --visited-mark: #2f7a2a;
+    --write: #d55a00;
+    --tle: #b35400;
+    --bar-fill: #d3dccf;
+    --bar-strong: #a3b0a0;
+
+    /* Catppuccin Latte token colors */
+    --syn-text: #4c4f69;
+    --syn-keyword: #8839ef;
+    --syn-string: #40a02b;
+    --syn-number: #fe640b;
+    --syn-comment: #7c7f93;
+    --syn-function: #1e66f5;
+    --syn-type: #df8e1d;
+    --syn-self: #d20f39;
+    --syn-operator: #04a5e5;
+    --syn-punct: #7c7f93;
+    --syn-selection: rgba(30, 102, 245, 0.2);
+}
+
+* {
+    box-sizing: border-box;
+}
+
+html {
+    min-height: 100%;
+    background: var(--paper);
+}
+
+body {
+    min-height: 100vh;
+    margin: 0;
+    color: var(--pencil);
+    background: var(--paper);
+    font-family: var(--sans);
+    font-size: 15px;
+    line-height: 1.45;
+}
+
+button,
+textarea,
+input,
+select {
+    font: inherit;
+}
+
+button {
+    color: inherit;
+}
+
+:focus-visible {
+    outline: 2px solid var(--pencil);
+    outline-offset: 2px;
+}
+
+h1,
+h2,
+p {
+    margin: 0;
+}
+
+.hidden,
+[hidden] {
+    display: none !important;
+}
+
+/* ---------- Header ---------- */
+
+.app-shell {
+    min-width: 1024px;
+    max-width: 1920px;
+    margin: 0 auto;
+    padding: 14px 20px 96px;
+}
+
+.app-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 24px;
+    margin-bottom: 14px;
+}
+
+.brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.brand-mark {
+    flex: none;
+    width: 38px;
+    height: 38px;
+}
+
+.brand-mark-margin {
+    stroke: var(--margin);
+    stroke-width: 1.5;
+}
+
+.brand-mark-highlight {
+    fill: var(--highlighter);
+}
+
+.brand-mark-lines {
+    fill: none;
+    stroke: var(--pencil);
+    stroke-linecap: round;
+    stroke-width: 2.2;
+}
+
+h1 {
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: -0.015em;
+    line-height: 1.15;
+}
+
+.brand p {
+    margin-top: 2px;
+    color: var(--pencil-muted);
+    font-size: 13px;
+}
+
+.header-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.language-control {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--pencil-muted);
+    font-size: 13px;
+}
+
+.language-control select,
+.speed-select {
+    min-height: 36px;
+    padding: 0 10px;
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    color: var(--pencil);
+    background: var(--sheet-raised);
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 500;
+}
+
+.button,
+.icon-button,
+.panel-action {
+    border: 1px solid transparent;
+    cursor: pointer;
+}
+
+.button {
+    min-height: 36px;
+    padding: 0 16px;
+    border-radius: var(--radius);
+    font-size: 14px;
+    font-weight: 700;
+}
+
+.button.primary {
+    min-width: 88px;
+    color: var(--paper);
+    background: var(--pencil);
+}
+
+.button.primary:hover {
+    background: var(--primary-hover);
+}
+
+.button.secondary {
+    border-color: var(--rule);
+    color: var(--pencil);
+    background: var(--sheet-raised);
+}
+
+.button.secondary:hover:not(:disabled) {
+    border-color: var(--pencil-muted);
+}
+
+.button:disabled {
+    cursor: default;
+    opacity: 0.5;
+}
+
+.run-icon {
+    margin-right: 6px;
+    font-size: 11px;
+}
+
+.status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    min-height: 32px;
+    padding: 0 4px;
+    color: var(--pencil-muted);
+    font-size: 13px;
+}
+
+.status-dot {
+    width: 9px;
+    height: 9px;
+    border: 1.5px solid var(--pencil-faint);
+    border-radius: 50%;
+}
+
+.status-pill.running .status-dot {
+    border-color: var(--pencil);
+    background: var(--highlighter);
+    animation: pulse 1.1s infinite;
+}
+
+.status-pill.success .status-dot {
+    border-color: var(--pencil);
+    background: var(--pencil);
+}
+
+.status-pill.error {
+    color: var(--red);
+}
+
+.status-pill.error .status-dot {
+    border-color: var(--red);
+    background: var(--red);
+}
+
+@keyframes pulse {
+    50% { opacity: 0.35; }
+}
+
+.message {
+    margin-bottom: 12px;
+    padding: 9px 14px;
+    border-left: 3px solid var(--red);
+    color: var(--red-text);
+    background: var(--sheet);
+    font-family: var(--mono);
+    font-size: 14px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+}
+
+.message.is-tle {
+    border-left-color: var(--tle);
+    color: var(--tle);
+}
+
+/* ---------- Workspace layout ---------- */
+
+/* `--left-width` is set while dragging the column resizer; without it the columns split 2:3. */
+.workspace-grid {
+    display: grid;
+    grid-template-columns: var(--left-width, minmax(380px, 0.8fr)) 14px minmax(480px, 1.2fr);
+    row-gap: 14px;
+    height: calc(100vh - 170px);
+    min-height: 640px;
+}
+
+/* Leave room for a one-line error message so the panels stay above the timeline. */
+.message:not(.hidden) + .workspace-grid {
+    height: calc(100vh - 226px);
+}
+
+.left-column,
+.right-column {
+    display: flex;
+    min-width: 0;
+    min-height: 0;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.source-panel { flex: 1 1 0; }
+.stdin-panel { flex: 0 0 auto; }
+.algorithm-panel { flex: 3 1 0; }
+.variables-panel { flex: 2 1 0; }
+.output-panel { flex: 0 0 auto; }
+
+/* A collapsed panel keeps only its header; the open panels share the space. */
+.panel.is-collapsed {
+    flex: 0 0 auto;
+}
+
+.left-column:has(.source-panel.is-collapsed) .stdin-panel:not(.is-collapsed),
+.right-column:not(:has(.algorithm-panel:not(.is-collapsed), .variables-panel:not(.is-collapsed))) .output-panel:not(.is-collapsed) {
+    flex: 1 1 0;
+}
+
+/* A fully collapsed column becomes a row of headers and the other column takes the full width. */
+.workspace-grid.left-collapsed,
+.workspace-grid.right-collapsed {
+    grid-template-columns: minmax(0, 1fr);
+}
+
+.workspace-grid.left-collapsed {
+    grid-template-rows: auto minmax(0, 1fr);
+}
+
+.workspace-grid.right-collapsed {
+    grid-template-rows: minmax(0, 1fr) auto;
+}
+
+.workspace-grid.left-collapsed.right-collapsed {
+    height: auto;
+    min-height: 0;
+    grid-template-rows: auto auto;
+}
+
+.workspace-grid.left-collapsed .left-column,
+.workspace-grid.right-collapsed .right-column {
+    flex-direction: row;
+}
+
+.workspace-grid.left-collapsed .column-resizer,
+.workspace-grid.right-collapsed .column-resizer {
+    display: none;
+}
+
+.column-resizer {
+    position: relative;
+    cursor: col-resize;
+    touch-action: none;
+}
+
+.column-resizer::before {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 6px;
+    width: 2px;
+    border-radius: 1px;
+    background: transparent;
+    content: "";
+}
+
+.column-resizer::after {
+    position: absolute;
+    top: 50%;
+    left: 4px;
+    width: 6px;
+    height: 36px;
+    border-radius: 3px;
+    background: var(--rule);
+    content: "";
+    transform: translateY(-50%);
+}
+
+.column-resizer:hover::before,
+.column-resizer:focus-visible::before,
+.column-resizer.is-dragging::before {
+    background: var(--pencil-muted);
+}
+
+.column-resizer:hover::after,
+.column-resizer.is-dragging::after {
+    background: var(--pencil-muted);
+}
+
+.column-resizer:focus-visible {
+    outline: none;
+}
+
+/* While dragging, keep the cursor and stop text selection everywhere. */
+body.is-resizing-columns {
+    cursor: col-resize;
+    user-select: none;
+}
+
+body.is-resizing-rows {
+    cursor: row-resize;
+    user-select: none;
+}
+
+/* Row resizers sit inside the 14px gap between right-column panels (the negative margins
+   cancel the extra gaps the resizer itself would add). */
+.row-resizer {
+    position: relative;
+    height: 14px;
+    flex: none;
+    margin: -14px 0;
+    cursor: row-resize;
+    touch-action: none;
+}
+
+.row-resizer[hidden] {
+    display: none;
+}
+
+.row-resizer::before {
+    position: absolute;
+    top: 6px;
+    right: 0;
+    left: 0;
+    height: 2px;
+    border-radius: 1px;
+    background: transparent;
+    content: "";
+}
+
+.row-resizer::after {
+    position: absolute;
+    top: 4px;
+    left: 50%;
+    width: 36px;
+    height: 6px;
+    border-radius: 3px;
+    background: var(--rule);
+    content: "";
+    transform: translateX(-50%);
+}
+
+.row-resizer:hover::before,
+.row-resizer:focus-visible::before,
+.row-resizer.is-dragging::before,
+.row-resizer:hover::after,
+.row-resizer.is-dragging::after {
+    background: var(--pencil-muted);
+}
+
+.row-resizer:focus-visible {
+    outline: none;
+}
+
+/* Heights set by a row resizer: each open panel grows in proportion to its dragged height. */
+.right-column > .panel.has-row-size:not(.is-collapsed) {
+    flex: var(--row-grow) 1 0px;
+}
+
+.output-panel.has-row-size .output-content {
+    height: auto;
+}
+
+.workspace-grid.left-collapsed .left-column > .panel,
+.workspace-grid.right-collapsed .right-column > .panel {
+    flex: 1 1 0;
+}
+
+.panel {
+    display: flex;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+    flex-direction: column;
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    background: var(--sheet);
+}
+
+.panel-header {
+    display: flex;
+    flex: none;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    min-height: 46px;
+    padding: 8px 12px 8px 16px;
+    border-bottom: 1px solid var(--rule);
+}
+
+.panel.is-collapsed .panel-header {
+    border-bottom-color: transparent;
+}
+
+h2 {
+    font-size: 15px;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+.panel-subtitle {
+    margin-left: 6px;
+    color: var(--pencil-faint);
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 400;
+}
+
+.panel-tools {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 10px;
+    min-width: 0;
+}
+
+.panel-meta {
+    overflow: hidden;
+    min-width: 0;
+    color: var(--pencil-muted);
+    font-family: var(--mono);
+    font-size: 12px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.panel-action {
+    flex: none;
+    min-height: 28px;
+    padding: 0 11px;
+    border-color: var(--rule);
+    border-radius: var(--radius);
+    color: var(--pencil);
+    background: var(--sheet-raised);
+    font-size: 13px;
+    font-weight: 500;
+}
+
+.panel-action:hover {
+    border-color: var(--pencil-muted);
+}
+
+.panel-body {
+    min-height: 0;
+    flex: 1 1 auto;
+    overflow-x: hidden;
+    overflow-y: auto;
+    padding: 12px 16px;
+}
+
+.empty-state {
+    display: grid;
+    place-items: center;
+    color: var(--pencil-faint);
+    font-size: 14px;
+    line-height: 1.5;
+    text-align: center;
+}
+
+/* ---------- Source: lined notebook paper with a red margin ---------- */
+
+.source-workspace {
+    display: flex;
+    min-height: 0;
+    flex: 1 1 auto;
+    flex-direction: column;
+}
+
+.editor-wrap,
+.source-viewer {
+    min-height: 0;
+    flex: 1 1 auto;
+}
+
+#code-editor,
+.source-viewer {
+    font-family: var(--mono);
+    font-size: 14px;
+    line-height: var(--line);
+}
+
+/*
+ * The editor is two layers: a colored <pre> underneath and a textarea on top whose text is
+ * transparent, so typing, selection, and the caret stay native while the colors show through.
+ * Both layers must share font, padding, line height, tab size, and wrapping exactly.
+ */
+.editor-wrap {
+    position: relative;
+}
+
+#code-editor,
+.editor-highlight {
+    position: absolute;
+    inset: 0;
+    display: block;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 18px 22px 18px calc(var(--gutter) + 14px);
+    border: 0;
+    font-family: var(--mono);
+    font-size: 14px;
+    line-height: var(--line);
+    tab-size: 4;
+    white-space: pre;
+    overflow-wrap: normal;
+}
+
+.editor-highlight {
+    /* Extra room so this layer can scroll as far as the textarea, whose scrollbar shortens its view. */
+    padding-bottom: 80px;
+    overflow: hidden;
+    isolation: isolate;
+    color: var(--syn-text);
+    background:
+        linear-gradient(to right, transparent calc(var(--gutter) - 1.5px), var(--margin) calc(var(--gutter) - 1.5px), var(--margin) var(--gutter), transparent var(--gutter)) 0 0 / 100% 100% no-repeat,
+        linear-gradient(to bottom, transparent calc(var(--line) - 1px), var(--rule-faint) calc(var(--line) - 1px)) 0 18px / 100% var(--line),
+        var(--sheet);
+    background-attachment: local;
+    pointer-events: none;
+}
+
+/* A line the syntax check or compiler rejected; it scrolls with the colored layer. */
+.editor-error-line {
+    position: absolute;
+    z-index: -1;
+    right: 0;
+    left: 0;
+    border-left: 4px solid var(--red);
+    background: color-mix(in srgb, var(--red) 18%, transparent);
+}
+
+/* Line numbers beside the editor; they follow the textarea's vertical scroll only. */
+.editor-gutter {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: var(--gutter);
+    overflow: hidden;
+    padding: 18px 0 80px;
+    background:
+        linear-gradient(to right, transparent calc(var(--gutter) - 1.5px), var(--margin) calc(var(--gutter) - 1.5px), var(--margin) var(--gutter)) 0 0 / 100% 100% no-repeat,
+        var(--sheet);
+    font-family: var(--mono);
+    pointer-events: none;
+    user-select: none;
+}
+
+.editor-line-number {
+    display: block;
+    height: var(--line);
+    padding-right: 12px;
+    background: linear-gradient(to bottom, transparent calc(var(--line) - 1px), var(--rule-faint) calc(var(--line) - 1px));
+    color: var(--pencil-faint);
+    font-size: 12px;
+    line-height: var(--line);
+    text-align: right;
+}
+
+.editor-line-number.current {
+    color: var(--pencil);
+    font-weight: 700;
+}
+
+.editor-line-number.error {
+    color: var(--red);
+    font-weight: 700;
+}
+
+#code-editor {
+    overflow: auto;
+    resize: none;
+    outline: 0;
+    color: transparent;
+    background: transparent;
+    caret-color: var(--pencil);
+}
+
+#code-editor::selection {
+    color: transparent;
+    background: var(--syn-selection);
+}
+
+#code-editor:focus-visible {
+    outline: 2px solid var(--pencil);
+    outline-offset: -2px;
+}
+
+.source-viewer {
+    overflow: auto;
+    overflow-anchor: none;
+    padding: 18px 0 30px;
+    background:
+        linear-gradient(to right, transparent calc(var(--gutter) - 1.5px), var(--margin) calc(var(--gutter) - 1.5px), var(--margin) var(--gutter), transparent var(--gutter)) 0 0 / 100% 100% no-repeat,
+        var(--sheet);
+    background-attachment: local;
+}
+
+.source-line {
+    display: grid;
+    grid-template-columns: var(--gutter) 1fr;
+    height: var(--line);
+    isolation: isolate;
+    background: linear-gradient(to bottom, transparent calc(var(--line) - 1px), var(--rule-faint) calc(var(--line) - 1px));
+    white-space: pre;
+}
+
+.source-line .line-number {
+    padding-right: 12px;
+    color: var(--pencil-faint);
+    font-size: 12px;
+    text-align: right;
+    user-select: none;
+}
+
+.source-line .line-code {
+    margin-left: 8px;
+    padding: 0 6px;
+    color: var(--syn-text);
+}
+
+.tok-keyword { color: var(--syn-keyword); }
+.tok-string { color: var(--syn-string); }
+.tok-number,
+.tok-constant,
+.tok-decorator { color: var(--syn-number); }
+.tok-comment { color: var(--syn-comment); font-style: italic; }
+.tok-function { color: var(--syn-function); }
+.tok-type { color: var(--syn-type); }
+.tok-self { color: var(--syn-self); }
+.tok-operator { color: var(--syn-operator); }
+.tok-punct { color: var(--syn-punct); }
+
+/* Inline-block makes the box a full line tall, so the highlighter covers the whole glyph height. */
+.source-line .line-text {
+    position: relative;
+    display: inline-block;
+    height: var(--line);
+}
+
+/* The one loud element: a highlighter stroke across the executing line. */
+/* Pastel token colors are unreadable on yellow, so the marked line switches to dark text. */
+.source-line.current .line-text,
+.source-line.current .line-text span {
+    color: var(--on-highlighter);
+}
+
+.source-line.current .line-text::before {
+    position: absolute;
+    z-index: -1;
+    inset: 3px -3px 4px -4px;
+    border-radius: 2px 7px 4px 3px / 5px 3px 6px 4px;
+    background: var(--highlighter);
+    content: "";
+    transform: rotate(-0.5deg);
+    transform-origin: left center;
+    animation: highlighter-swipe 170ms ease-out;
+}
+
+.source-line.current .line-number {
+    color: var(--pencil);
+    font-weight: 700;
+}
+
+.source-line.error .line-text {
+    text-decoration: underline wavy var(--red) 1.5px;
+    text-underline-offset: 6px;
+}
+
+.source-line.error .line-number {
+    color: var(--red);
+}
+
+/* TLE: where the program was running when time or the step limit ran out. */
+.source-line.timeout .line-text {
+    text-decoration: underline dashed var(--tle) 2px;
+    text-underline-offset: 6px;
+}
+
+.source-line.timeout .line-number {
+    color: var(--tle);
+}
+
+@keyframes highlighter-swipe {
+    from { transform: rotate(-0.5deg) scaleX(0); }
+}
+
+.stdin-body {
+    display: flex;
+    min-height: 0;
+    flex: 1 1 auto;
+}
+
+#stdin-editor {
+    width: 100%;
+    height: 116px;
+    min-height: 0;
+    flex: 1 1 auto;
+    padding: 10px 16px 12px;
+    resize: none;
+    border: 0;
+    outline: 0;
+    color: var(--pencil);
+    background: var(--sheet);
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.left-column:has(.source-panel.is-collapsed) #stdin-editor {
+    height: 100%;
+}
+
+#stdin-editor:focus-visible {
+    outline: 2px solid var(--pencil);
+    outline-offset: -2px;
+}
+
+/* ---------- Variables: a trace table ---------- */
+
+/*
+ * Two zones: single values as rows on the left, containers stacked on the right. Each zone
+ * scrolls on its own, so a tall array never pushes the single values out of view.
+ */
+.variables-panel {
+    container-type: inline-size;
+}
+
+#variables.has-zones {
+    display: flex;
+    overflow: hidden;
+}
+
+.variable-zones {
+    display: grid;
+    flex: 1 1 auto;
+    min-height: 0;
+    grid-template-columns: minmax(0, 1fr);
+}
+
+.variable-zones.is-split {
+    grid-template-columns: minmax(190px, 1fr) minmax(0, 2.2fr);
+    gap: 18px;
+}
+
+.scalar-zone,
+.container-zone {
+    min-width: 0;
+    min-height: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+}
+
+/* Name, value, and type line up in columns across the rows. */
+.scalar-zone {
+    display: grid;
+    align-content: start;
+    grid-template-columns: max-content minmax(0, max-content) minmax(0, 1fr);
+    column-gap: 12px;
+}
+
+/* With no containers, the rows flow into as many columns as fit. */
+.variable-zones:not(.is-split) .scalar-zone {
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+}
+
+.variable-zones:not(.is-split) .scalar-row {
+    grid-column: auto;
+    grid-template-columns: max-content minmax(0, max-content) minmax(0, 1fr);
+    column-gap: 12px;
+}
+
+.scalar-row {
+    display: grid;
+    grid-column: span 3;
+    grid-template-columns: subgrid;
+    align-items: baseline;
+    padding: 4px 0 4px 8px;
+    border-bottom: 1px solid var(--rule-faint);
+    border-left: 3px solid transparent;
+}
+
+.scalar-row .variable-label {
+    justify-self: start;
+    font-family: var(--mono);
+    font-size: 14px;
+    font-weight: 700;
+}
+
+.scalar-row .value-view {
+    padding: 0;
+}
+
+.scalar-row.is-on-line .variable-label {
+    margin-left: -4px;
+    padding: 0 4px;
+    border-radius: 2px;
+    color: var(--on-highlighter);
+    background: var(--highlighter);
+}
+
+.scalar-row.is-changed {
+    border-left-color: var(--write);
+}
+
+.scalar-row.is-changed .value-view {
+    color: var(--write);
+}
+
+.scalar-group {
+    grid-column: 1 / -1;
+    padding: 10px 0 2px;
+    color: var(--pencil-faint);
+    font-size: 12px;
+}
+
+.container-zone {
+    display: grid;
+    align-content: start;
+    gap: 6px;
+}
+
+.variable-card {
+    min-width: 0;
+    border-top: 1px solid var(--rule);
+}
+
+/* A narrow panel stacks the zones and scrolls as one. */
+@container (max-width: 520px) {
+    #variables.has-zones {
+        display: block;
+        overflow-y: auto;
+    }
+
+    .variable-zones.is-split {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .scalar-zone,
+    .container-zone {
+        overflow: visible;
+    }
+}
+
+.fill-note {
+    display: block;
+    padding-top: 6px;
+    color: var(--pencil-muted);
+    font-family: var(--sans);
+    font-size: 12px;
+}
+
+.variable-name {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 7px 0 3px;
+    font-family: var(--mono);
+    font-size: 14px;
+    font-weight: 700;
+}
+
+/* Used on this line: the name gets the highlighter. Changed by the last line: orange. */
+.usage-legend {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--pencil-muted);
+    font-size: 12px;
+    white-space: nowrap;
+}
+
+.usage-swatch {
+    width: 12px;
+    height: 12px;
+    margin-left: 6px;
+    border-radius: 2px;
+}
+
+.usage-swatch.on-line { background: var(--highlighter); }
+.usage-swatch.changed { border: 2px solid var(--write); }
+
+.variable-card.is-on-line .variable-label {
+    margin-left: -4px;
+    padding: 0 4px;
+    border-radius: 2px;
+    color: var(--on-highlighter);
+    background: var(--highlighter);
+}
+
+.variable-card.is-changed {
+    border-top: 2px solid var(--write);
+}
+
+.variable-card.is-changed .value-view {
+    color: var(--write);
+}
+
+.changed-tag {
+    margin-right: 6px;
+    color: var(--write);
+    font-weight: 700;
+}
+
+.type-tag {
+    color: var(--pencil-faint);
+    font-family: var(--sans);
+    font-size: 12px;
+    font-weight: 400;
+}
+
+.value-view {
+    min-width: 0;
+    padding: 2px 0 10px;
+    font-family: var(--mono);
+    font-size: 14px;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+}
+
+.primitive.str { color: var(--string); }
+.primitive.none { color: var(--pencil-faint); font-style: italic; }
+.reference-value { color: var(--ink); font-weight: 700; }
+.truncated-note { margin-left: 6px; color: var(--pencil-faint); font-size: 12px; }
+
+/* Long lists wrap onto more rows instead of scrolling sideways. */
+.array-view {
+    display: flex;
+    flex-wrap: wrap;
+    padding: 1px 0 3px 1px;
+}
+
+/* 2D arrays: a small table with row and column indexes. */
+.table-view {
+    display: grid;
+    width: max-content;
+    max-width: 100%;
+    overflow: hidden;
+    border-top: 1px solid var(--rule);
+    border-left: 1px solid var(--rule);
+}
+
+.table-view > span {
+    min-width: 28px;
+    padding: 2px 6px;
+    border-right: 1px solid var(--rule);
+    border-bottom: 1px solid var(--rule);
+    text-align: center;
+    white-space: nowrap;
+}
+
+.table-view > .table-index {
+    color: var(--pencil-faint);
+    font-size: 11px;
+}
+
+.array-cell {
+    min-width: 44px;
+    max-width: 100%;
+    flex: 0 1 auto;
+    margin: -1px 0 0 -1px;
+    border: 1px solid var(--rule);
+    text-align: center;
+}
+
+.array-cell .array-index {
+    display: block;
+    padding: 1px 6px;
+    border-bottom: 1px solid var(--rule-faint);
+    color: var(--pencil-faint);
+    font-size: 11px;
+}
+
+.array-item {
+    padding: 4px 7px;
+    white-space: nowrap;
+}
+
+.array-item .primitive.str {
+    white-space: normal;
+}
+
+.dict-view {
+    display: grid;
+    border-top: 1px solid var(--rule);
+}
+
+.dict-row {
+    display: grid;
+    grid-template-columns: minmax(50px, 0.65fr) minmax(70px, 1fr);
+    border-bottom: 1px solid var(--rule);
+}
+
+.dict-key,
+.dict-value {
+    min-width: 0;
+    padding: 4px 8px;
+}
+
+.dict-key {
+    overflow: hidden;
+    border-right: 1px solid var(--rule);
+    color: var(--pencil-muted);
+    text-overflow: ellipsis;
+}
+
+/* ---------- stdout: three lines, newest output kept in view ---------- */
+
+.output-content {
+    height: calc(3 * 1.6em + 20px);
+    min-height: 0;
+    flex: 1 1 auto;
+    margin: 0;
+    overflow: auto;
+    padding: 10px 16px;
+    color: var(--pencil);
+    background: var(--sheet);
+    font-family: var(--mono);
+    font-size: 14px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+}
+
+.output-placeholder {
+    color: var(--pencil-faint);
+}
+
+/* ---------- Draggable SVG nodes ---------- */
+
+.algorithm-canvas {
+    background: var(--grid-lines), var(--sheet);
+}
+
+.algorithm-graph-node {
+    cursor: grab;
+    touch-action: none;
+    user-select: none;
+}
+
+.algorithm-graph-node.dragging {
+    cursor: grabbing;
+}
+
+/* ---------- Algorithm view: fills its panel ---------- */
+
+.algorithm-summary {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 12px;
+    min-width: 0;
+}
+
+.view-control {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: 6px;
+    color: var(--pencil-muted);
+    font-size: 13px;
+}
+
+.view-control select,
+.view-variable-select {
+    min-height: 28px;
+    padding: 0 8px;
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    color: var(--pencil);
+    background: var(--sheet-raised);
+    cursor: pointer;
+    font-size: 13px;
+}
+
+.view-variable-select {
+    flex: none;
+    font-family: var(--mono);
+}
+
+.confidence-badge {
+    flex: none;
+    color: var(--pencil-faint);
+    font-family: var(--mono);
+    font-size: 12px;
+}
+
+.confidence-badge.high,
+.confidence-badge.medium {
+    color: var(--pencil-muted);
+}
+
+.confidence-badge.high {
+    font-weight: 700;
+}
+
+.algorithm-canvas {
+    min-height: 0;
+    flex: 1 1 auto;
+    overflow: auto;
+    overflow-anchor: none;
+    padding: 16px 20px;
+}
+
+.algorithm-waiting {
+    display: grid;
+    height: 100%;
+    place-items: center;
+    color: var(--pencil-faint);
+    font-size: 14px;
+    text-align: center;
+}
+
+.algorithm-meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 14px;
+    color: var(--pencil-muted);
+    font-family: var(--mono);
+    font-size: 13px;
+}
+
+.algorithm-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+    font-family: var(--sans);
+}
+
+.legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.legend-swatch {
+    width: 14px;
+    height: 14px;
+    border: 1px solid var(--pencil-muted);
+    border-radius: 2px;
+    background: var(--sheet);
+}
+
+.legend-swatch.visited {
+    display: inline-grid;
+    place-items: center;
+    background: var(--visited-bg);
+}
+
+.legend-swatch.visited::after {
+    color: var(--visited-mark);
+    content: "✓";
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1;
+}
+.legend-swatch.frontier { border: 1.5px dashed var(--pencil); }
+.legend-swatch.checking { height: 4px; border: 0; background: var(--highlighter); }
+.legend-swatch.written { border: 2px solid var(--write); }
+.legend-swatch.on-stack { border: 1.5px solid var(--pencil); }
+.legend-swatch.returned { opacity: 0.45; }
+
+/* The tree scrolls sideways; its summary and legend stay pinned to the panel's left edge. */
+.algorithm-meta.is-sticky {
+    position: sticky;
+    left: 0;
+}
+
+.algorithm-meta-details {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 16px;
+}
+
+/* Written (changed since the previous step) is outlined in orange; reading uses the highlighter. */
+.algorithm-cell.written {
+    box-shadow: inset 0 0 0 2px var(--write);
+}
+
+.array-column.written .array-bar {
+    border: 2px solid var(--write);
+    border-bottom: 0;
+}
+
+.array-column.written .array-value {
+    color: var(--write);
+    font-weight: 700;
+}
+.legend-swatch.active { border-color: var(--pencil); background: var(--highlighter); }
+.legend-swatch.wall { border-color: var(--wall); background: var(--wall); }
+
+.algorithm-grid {
+    --cell: 34px;
+    display: grid;
+    width: max-content;
+    margin: 0 auto;
+    gap: 3px;
+}
+
+.algorithm-cell {
+    position: relative;
+    display: grid;
+    place-items: center;
+    width: var(--cell);
+    height: var(--cell);
+    border: 1px solid var(--rule);
+    border-radius: 2px;
+    color: var(--pencil-muted);
+    background: var(--sheet);
+    font-family: var(--mono);
+    font-size: var(--cell-font, calc(var(--cell) * 0.38));
+}
+
+.algorithm-cell.wall {
+    border-color: var(--wall);
+    color: var(--wall-text);
+    background: var(--wall);
+}
+
+.algorithm-cell.visited {
+    border-color: var(--pencil-muted);
+    color: var(--pencil);
+    background: var(--visited-bg);
+}
+
+/* Visited cells carry a small check in the corner so the cell value stays readable. */
+.algorithm-cell.visited::after {
+    position: absolute;
+    top: 2px;
+    right: 3px;
+    color: var(--visited-mark);
+    content: "✓";
+    font-family: var(--sans);
+    font-size: max(9px, calc(var(--cell) * 0.26));
+    font-weight: 700;
+    line-height: 1;
+}
+
+.algorithm-cell.current::after {
+    color: var(--on-highlighter);
+}
+
+.algorithm-cell.frontier {
+    border: 1.5px dashed var(--pencil);
+}
+
+/* The (i, j) cell a scanning loop is on: a highlighter ring that also shows on walls. */
+.algorithm-cell.scan {
+    z-index: 1;
+    border-color: var(--highlighter);
+    box-shadow: inset 0 0 0 2.5px var(--highlighter);
+}
+
+.algorithm-cell.candidate {
+    z-index: 1;
+    border: 2px solid var(--pencil);
+    border-radius: 50%;
+    color: var(--pencil);
+}
+
+.algorithm-cell.current {
+    z-index: 1;
+    border: 1.5px solid var(--pencil);
+    color: var(--on-highlighter);
+    background: var(--highlighter);
+    font-weight: 700;
+}
+
+.array-visualizer {
+    --column: 38px;
+    display: flex;
+    min-width: max-content;
+    align-items: flex-end;
+    justify-content: center;
+    gap: 8px;
+    padding: 24px 18px 24px;
+}
+
+.array-column {
+    position: relative;
+    display: flex;
+    width: var(--column);
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 6px;
+}
+
+.array-bar {
+    width: 100%;
+    min-height: 5px;
+    border: 1px solid var(--pencil-muted);
+    border-bottom: 0;
+    border-radius: 2px 2px 0 0;
+    background: var(--bar-fill);
+}
+
+.array-column.compare .array-bar {
+    border-color: var(--pencil);
+    background: var(--bar-strong);
+}
+
+.array-column.bound .array-bar {
+    border: 2px solid var(--pencil);
+    border-bottom: 0;
+}
+
+.array-column.active .array-bar,
+.array-column.mid .array-bar {
+    border-color: var(--pencil);
+    background: var(--highlighter);
+}
+
+.array-column.outside-bound {
+    opacity: 0.3;
+}
+
+.algorithm-readouts {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 14px;
+}
+
+.algorithm-readout {
+    color: var(--pencil);
+    font-weight: 700;
+}
+
+/* Values read from stdin that never change, shown once above whatever view is drawn. */
+.algorithm-inputs {
+    display: flex;
+    flex: 0 0 auto;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 6px 16px;
+    padding: 6px 16px;
+    border-bottom: 1px solid var(--rule-faint);
+    font-family: var(--mono);
+    font-size: 13px;
+}
+
+.algorithm-inputs[hidden],
+.algorithm-panel.is-collapsed .algorithm-inputs {
+    display: none;
+}
+
+.algorithm-inputs .algorithm-readout.is-on-line {
+    padding: 0 4px;
+    border-radius: 2px;
+    color: var(--on-highlighter);
+    background: var(--highlighter);
+}
+
+.array-column .array-index,
+.array-marker {
+    font-family: var(--mono);
+    font-size: 12px;
+}
+
+.array-column .array-index {
+    color: var(--pencil-faint);
+}
+
+.array-value {
+    color: var(--pencil);
+    font-family: var(--mono);
+    font-size: 13px;
+}
+
+.array-marker {
+    position: absolute;
+    bottom: -20px;
+    color: var(--pencil);
+    font-weight: 700;
+}
+
+/* ---------- Cells (Array1D) ---------- */
+
+.cells-view {
+    --cell-width: 56px;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 14px 4px;
+    padding: 12px 0;
+}
+
+.cells-item {
+    display: flex;
+    width: var(--cell-width);
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+}
+
+.cells-index,
+.cells-marker {
+    min-height: 16px;
+    font-family: var(--mono);
+    font-size: 12px;
+}
+
+.cells-index {
+    color: var(--pencil-faint);
+}
+
+.cells-marker {
+    color: var(--pencil);
+    font-weight: 700;
+}
+
+.cells-value {
+    display: block;
+    overflow: hidden;
+    width: 100%;
+    height: calc(min(var(--cell-width), 64px));
+    border: 1px solid var(--pencil-muted);
+    border-radius: 2px;
+    color: var(--pencil);
+    background: var(--sheet-raised);
+    font-family: var(--mono);
+    font-size: 15px;
+    line-height: calc(min(var(--cell-width), 64px) - 2px);
+    text-align: center;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.cells-item.compare .cells-value {
+    border-color: var(--pencil);
+    background: var(--bar-strong);
+}
+
+.cells-item.bound .cells-value {
+    border: 2px solid var(--pencil);
+}
+
+.cells-item.written .cells-value {
+    border: 2px solid var(--write);
+    color: var(--write);
+    font-weight: 700;
+}
+
+.cells-item.active .cells-value,
+.cells-item.mid .cells-value {
+    border-color: var(--pencil);
+    color: var(--on-highlighter);
+    background: var(--highlighter);
+}
+
+.cells-item.written.active .cells-value,
+.cells-item.written.mid .cells-value {
+    border-color: var(--write);
+}
+
+.cells-item.outside-bound {
+    opacity: 0.3;
+}
+
+/* ---------- Recursion tree ---------- */
+
+.recursion-tree {
+    display: flex;
+    min-width: max-content;
+    justify-content: center;
+}
+
+.recursion-tree-svg {
+    display: block;
+}
+
+.recursion-edge {
+    fill: none;
+    stroke: var(--rule);
+    stroke-width: 1.5;
+}
+
+.recursion-edge.on-stack {
+    stroke: var(--pencil-muted);
+    stroke-width: 2;
+}
+
+.recursion-node rect {
+    fill: var(--sheet-raised);
+    stroke: var(--pencil-faint);
+    stroke-width: 1;
+}
+
+.recursion-node.on-stack rect {
+    stroke: var(--pencil);
+    stroke-width: 1.5;
+}
+
+.recursion-node.current rect {
+    fill: var(--highlighter);
+    stroke: var(--pencil);
+    stroke-width: 2;
+}
+
+.recursion-node.returned {
+    opacity: 0.5;
+}
+
+.recursion-label,
+.recursion-return {
+    fill: var(--pencil);
+    font-family: var(--mono);
+    font-size: 13px;
+}
+
+.recursion-node.current .recursion-label {
+    fill: var(--on-highlighter);
+    font-weight: 700;
+}
+
+.recursion-return {
+    fill: var(--syn-string);
+    font-size: 12px;
+}
+
+/* Call order: #1 is the first call made after main / <module>. */
+.recursion-order {
+    fill: var(--syn-number);
+    font-weight: 700;
+}
+
+.recursion-node.current .recursion-order {
+    fill: var(--on-highlighter);
+}
+
+.recursion-node,
+.call-chain-node {
+    cursor: grab;
+    touch-action: none;
+    user-select: none;
+}
+
+.recursion-node.dragging,
+.call-chain-node.dragging {
+    cursor: grabbing;
+}
+
+/* ---------- Call chain ---------- */
+
+.call-chain-svg {
+    display: block;
+}
+
+.call-chain-edge {
+    fill: none;
+    stroke: var(--pencil-muted);
+    stroke-width: 1.5;
+}
+
+.call-chain-arrow-head {
+    fill: var(--pencil-muted);
+}
+
+.call-chain-node rect {
+    fill: var(--sheet-raised);
+    stroke: var(--pencil-muted);
+    stroke-width: 1.25;
+}
+
+.call-chain-node.current rect {
+    fill: var(--highlighter);
+    stroke: var(--pencil);
+    stroke-width: 2;
+}
+
+.call-chain-node.hidden-frames rect {
+    stroke-dasharray: 4 3;
+}
+
+.call-chain-node text {
+    fill: var(--pencil);
+    font-family: var(--mono);
+    font-size: 14px;
+    text-anchor: middle;
+    dominant-baseline: central;
+}
+
+.call-chain-node.current text {
+    fill: var(--on-highlighter);
+    font-weight: 700;
+}
+
+.call-tree-view {
+    display: flex;
+    height: 100%;
+    min-height: 160px;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.call-tree-node {
+    position: relative;
+    flex: none;
+    min-width: 140px;
+    padding: 12px 14px;
+    border: 1px solid var(--pencil-muted);
+    border-radius: var(--radius);
+    background: var(--sheet-raised);
+    font-family: var(--mono);
+    font-size: 15px;
+    text-align: center;
+}
+
+.call-tree-node.current {
+    border-color: var(--pencil);
+    color: var(--on-highlighter);
+    background: var(--highlighter);
+    font-weight: 700;
+}
+
+.call-tree-arrow {
+    color: var(--pencil-muted);
+    font-size: 20px;
+}
+
+.algorithm-graph-svg {
+    display: block;
+}
+
+.algorithm-graph-edge {
+    stroke: var(--pencil-muted);
+    stroke-width: 1.5;
+}
+
+.algorithm-graph-edge.checking {
+    stroke: var(--highlighter);
+    stroke-width: 4;
+}
+
+/* Edge weights of a weighted adjacency list (`vector<pair<int,int>> adj[N]`). */
+.algorithm-graph-weight {
+    fill: var(--pencil-muted);
+    font-family: var(--mono);
+    font-size: 12px;
+    text-anchor: middle;
+    dominant-baseline: middle;
+    paint-order: stroke;
+    stroke: var(--sheet);
+    stroke-width: 3px;
+    pointer-events: none;
+}
+
+.algorithm-graph-arrow {
+    fill: var(--pencil-muted);
+}
+
+.algorithm-graph-node circle {
+    fill: var(--sheet-raised);
+    stroke: var(--pencil-muted);
+    stroke-width: 1.5;
+}
+
+.algorithm-graph-node.visited circle {
+    fill: var(--visited-bg);
+    stroke: var(--pencil);
+}
+
+.algorithm-graph-node.current circle {
+    fill: var(--highlighter);
+    stroke: var(--pencil);
+    stroke-width: 2.5;
+}
+
+.algorithm-graph-node text {
+    fill: var(--pencil);
+    font-family: var(--mono);
+    font-size: 15px;
+    font-weight: 700;
+    text-anchor: middle;
+    dominant-baseline: central;
+}
+
+.algorithm-graph-node.current text {
+    fill: var(--on-highlighter);
+}
+
+/* Vertices waiting in the BFS queue / DFS stack: a dashed ring, as in the grid's frontier. */
+.algorithm-graph-node .queue-ring {
+    fill: none;
+    stroke: var(--pencil);
+    stroke-dasharray: 5 4;
+    stroke-width: 1.5;
+}
+
+.algorithm-graph-node text.node-value,
+.algorithm-graph-node.current text.node-value {
+    fill: var(--write);
+    font-size: 12px;
+    font-weight: 400;
+    text-anchor: start;
+    /* A halo in the sheet colour keeps the label readable where it crosses an edge. */
+    paint-order: stroke;
+    stroke: var(--sheet);
+    stroke-width: 4px;
+    stroke-linejoin: round;
+}
+
+.graph-frontier {
+    white-space: pre;
+}
+
+.execution-visualizer {
+    display: grid;
+    height: 100%;
+    min-height: 160px;
+    place-items: center;
+}
+
+.execution-orbit {
+    padding: 14px 18px;
+    border-left: 3px solid var(--pencil);
+    color: var(--pencil);
+    background: var(--sheet);
+    font-family: var(--mono);
+    font-size: 16px;
+    line-height: 1.6;
+}
+
+/* ---------- Timeline ---------- */
+
+.timeline {
+    position: fixed;
+    z-index: 20;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    display: grid;
+    grid-template-columns: auto auto minmax(240px, 760px) auto auto;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    min-height: 72px;
+    padding: 10px 24px;
+    border-top: 1px solid var(--rule);
+    background: var(--paper);
+}
+
+.timeline-buttons,
+.playback-controls {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.play-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    min-width: 92px;
+}
+
+.play-button[aria-pressed="true"] {
+    border-color: var(--pencil);
+    color: var(--on-highlighter);
+    background: var(--highlighter);
+}
+
+.play-icon {
+    width: 12px;
+    font-size: 11px;
+    text-align: center;
+}
+
+.icon-button {
+    display: grid;
+    place-items: center;
+    width: 38px;
+    height: 36px;
+    border-color: var(--rule);
+    border-radius: var(--radius);
+    color: var(--pencil);
+    background: var(--sheet-raised);
+    font-family: var(--mono);
+    font-size: 17px;
+}
+
+.icon-button:hover:not(:disabled) {
+    border-color: var(--pencil-muted);
+}
+
+.icon-button:disabled {
+    cursor: default;
+    opacity: 0.4;
+}
+
+.timeline-center {
+    min-width: 0;
+}
+
+.timeline-labels {
+    display: flex;
+    align-items: baseline;
+    justify-content: center;
+    gap: 10px;
+    margin-bottom: 6px;
+    font-family: var(--mono);
+    font-size: 13px;
+}
+
+.event-badge {
+    color: var(--pencil-muted);
+    font-size: 12px;
+}
+
+#step-slider {
+    width: 100%;
+    height: 3px;
+    margin: 6px 0;
+    appearance: none;
+    border-radius: 0;
+    background: var(--pencil-muted);
+    cursor: pointer;
+}
+
+#step-slider:disabled {
+    background: var(--rule);
+    cursor: default;
+}
+
+/* The slider thumb is the current step, so it carries the highlighter. */
+#step-slider::-webkit-slider-thumb {
+    width: 14px;
+    height: 22px;
+    appearance: none;
+    border: 1.5px solid var(--pencil);
+    border-radius: 2px;
+    background: var(--highlighter);
+}
+
+#step-slider::-moz-range-thumb {
+    width: 12px;
+    height: 20px;
+    border: 1.5px solid var(--pencil);
+    border-radius: 2px;
+    background: var(--highlighter);
+}
+
+#step-slider:disabled::-webkit-slider-thumb {
+    border-color: var(--rule);
+    background: var(--sheet);
+}
+
+#step-slider:disabled::-moz-range-thumb {
+    border-color: var(--rule);
+    background: var(--sheet);
+}
+
+.keyboard-hint {
+    color: var(--pencil-muted);
+    font-size: 12px;
+    white-space: nowrap;
+}
+
+kbd {
+    margin: 0 2px;
+    padding: 1px 5px;
+    border: 1px solid var(--rule);
+    border-bottom-width: 2px;
+    border-radius: 2px;
+    color: var(--pencil);
+    background: var(--sheet-raised);
+    font-family: var(--mono);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .source-line.current .line-text::before,
+    .status-pill.running .status-dot {
+        animation: none;
+    }
+}
