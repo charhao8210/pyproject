@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import ast
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Iterable
 
 from .loops import loop_jumps, loop_ranges
@@ -24,6 +24,8 @@ class AlgorithmProfile:
     renderer: str
     confidence: float
     evidence: tuple[str, ...]
+    # Arrays the loops write, most deeply nested first: what an array view should draw.
+    focus: tuple[str, ...] = ()
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -110,7 +112,7 @@ def analyze_execution(
 ) -> dict[str, Any]:
     decoded: dict[int, Any] = {}
     scopes = [_decode_scope(step, decoded) for step in steps]
-    shapes = _runtime_shapes(scopes)
+    shapes = _runtime_shapes(scopes, _edge_id_lists(source))
     if language == "cpp":
         profile = _classify_cpp(source, shapes)
     else:
@@ -118,6 +120,7 @@ def analyze_execution(
         features = _FeatureVisitor()
         features.visit(tree)
         profile = _classify(features, shapes)
+    profile = _with_focus(profile, source, language)
 
     parent_name, first_vertex = _union_find_parent(source)
     if parent_name is not None:
@@ -199,6 +202,53 @@ def analyze_execution(
     if language == "cpp":
         result["method"] = "C++ source and runtime-state heuristics"
     return result
+
+
+GENERIC_ARRAY_PROFILES = ("Comparison-based array algorithm", "Array iteration")
+DP_LIKE_NAMES = frozenset({"dp", "memo", "can", "ways", "f", "best", "reach", "reachable", "possible", "ok"})
+_SUBSCRIPT_WRITE = re.compile(
+    r"\b([A-Za-z_]\w*)\s*(?:\[(?:[^\[\]]|\[[^\[\]]*\])*\]\s*)+"
+    r"(?:(?:[-+*/%^|&]|//|<<|>>|\*\*)?=(?!=)|\+\+|--)"
+)
+
+
+def _with_focus(profile: AlgorithmProfile, source: str, language: str) -> AlgorithmProfile:
+    """Point a generic array profile at the array its loops write (`dp`, `can`), not the input."""
+    generic = profile.name in GENERIC_ARRAY_PROFILES
+    if not generic and profile.kind != "dynamic_programming":
+        return profile
+    focus = _loop_written_arrays(source, language)
+    if not focus:
+        return profile
+    if generic and focus[0].lower() in DP_LIKE_NAMES:
+        return AlgorithmProfile(
+            "dynamic_programming",
+            "Dynamic programming · 1D table",
+            "array",
+            0.8,
+            ("1D state array", "updated inside loops"),
+            focus,
+        )
+    return replace(profile, focus=focus)
+
+
+def _loop_written_arrays(source: str, language: str) -> tuple[str, ...]:
+    if language == "cpp":
+        from .cpp_source import strip_code
+
+        source = strip_code(source)
+    loops = loop_ranges(source, language)
+    depth_of: dict[str, int] = {}
+    for line_number, line in enumerate(source.split("\n"), start=1):
+        if language != "cpp":
+            line = line.split("#", 1)[0]
+        depth = sum(loop.first_line <= line_number <= loop.last_line for loop in loops)
+        if not depth:
+            continue
+        for match in _SUBSCRIPT_WRITE.finditer(line):
+            name = match.group(1)
+            depth_of[name] = max(depth_of.get(name, 0), depth)
+    return tuple(sorted(depth_of, key=lambda name: -depth_of[name]))
 
 
 AUTO_VIEW = "auto"
@@ -661,7 +711,14 @@ def _classify(features: _FeatureVisitor, shapes: set[str]) -> AlgorithmProfile:
     )
 
 
-def _runtime_shapes(scopes: list[dict[str, Any]]) -> set[str]:
+def _edge_id_lists(source: str) -> frozenset[str]:
+    """Lists filled with edge numbers (`g[a].push_back(edges.size())`): their rows are not neighbours."""
+    return frozenset(
+        re.findall(r"\b([A-Za-z_]\w*)\s*\[[^\]]*\]\s*\.\s*(?:push_back|emplace_back|append)\s*\(\s*(?:len\s*\(\s*\w+\s*\)|\w+\s*\.\s*size\s*\(\s*\))\s*\)", source)
+    )
+
+
+def _runtime_shapes(scopes: list[dict[str, Any]], edge_id_lists: frozenset[str] = frozenset()) -> set[str]:
     shapes: set[str] = set()
     for scope in scopes:
         for name, value in scope.items():
@@ -675,7 +732,7 @@ def _runtime_shapes(scopes: list[dict[str, Any]]) -> set[str]:
                     shapes.add("grid")
             if _numeric_array_projection(value) is not None:
                 shapes.add("numeric_array")
-            if _is_adjacency(value, name) and name.lower() not in NOT_A_GRAPH_NAMES:
+            if _is_adjacency(value, name) and name.lower() not in NOT_A_GRAPH_NAMES and name not in edge_id_lists:
                 shapes.add("graph")
                 # Rows of different lengths: a real adjacency list, not a numeric table.
                 if isinstance(value, list) and len({len(row) for row in value}) > 1:
@@ -718,6 +775,13 @@ def _index_serialized(value: Any, registry: dict[int, dict[str, Any]]) -> None:
         _index_serialized(entry.get("value"), registry)
 
 
+SET_CLASSES = frozenset({"set", "multiset", "unordered_set"})
+
+
+class _SetItems(list):
+    """Decoded members of a set: a list for every view, but never a table of rows."""
+
+
 def _decode_value(
     value: Any,
     registry: dict[int, dict[str, Any]],
@@ -748,10 +812,12 @@ def _decode_value(
         seen = {*seen, object_id}
 
     if type_name in {"list", "tuple", "set", "frozenset"}:
-        return [
+        items = [
             _decode_value(item, registry, seen)
             for item in value.get("items", [])[:MAX_VISUAL_ITEMS]
         ]
+        unordered = type_name in {"set", "frozenset"} or value.get("class_name") in SET_CLASSES
+        return _SetItems(items) if unordered else items
     if type_name == "dict":
         decoded: dict[Any, Any] = {}
         for entry in value.get("entries", [])[:MAX_VISUAL_ITEMS]:
@@ -1041,9 +1107,17 @@ def _array_visualization(
     name: str | None = None,
     extents: dict[str, tuple[int, int]] | None = None,
 ) -> dict[str, Any]:
-    preferred = ("dp", *ARRAY_NAMES) if profile.kind == "dynamic_programming" else ARRAY_NAMES
-    for array_name, value in _named_values(scope, name, preferred):
+    preferred = ("dp", *profile.focus, *ARRAY_NAMES) if profile.kind == "dynamic_programming" else (*profile.focus, *ARRAY_NAMES)
+    candidates = _named_values(scope, name, preferred)
+    if name is None and profile.focus:
+        # Before the written array exists (input being read), draw nothing rather than the input.
+        focus = {*profile.focus, *(("dp",) if profile.kind == "dynamic_programming" else ())}
+        candidates = [(array_name, value) for array_name, value in candidates if array_name in focus]
+    for array_name, value in candidates:
         projection = _numeric_array_projection(value)
+        if projection is None and array_name in profile.focus and _is_bool_list(value):
+            # `can[s] = True`: a reachability table, drawn as 0/1 bars.
+            projection = [int(item) for item in value], None
         if projection is None:
             continue
         numeric_values, item_labels = projection
@@ -1673,6 +1747,9 @@ def _used_rows(value: Any) -> Any:
 
 
 def _is_grid(value: Any) -> bool:
+    # A set of pairs (`set<pair<int,int>>`, `{(r, c)}`) has no rows to line up.
+    if isinstance(value, _SetItems):
+        return False
     value = _used_rows(value)
     if not isinstance(value, list) or not value:
         return False
@@ -1712,6 +1789,10 @@ def _numeric_array_projection(
         numbers.append(number)
         labels.append(label)
     return numbers, labels
+
+
+def _is_bool_list(value: Any) -> bool:
+    return isinstance(value, list) and bool(value) and all(isinstance(item, bool) for item in value)
 
 
 def _is_flag_array(value: list[Any], numeric_nodes: list[int]) -> bool:

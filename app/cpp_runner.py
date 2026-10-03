@@ -85,6 +85,8 @@ class _Discovery:
     # the scope is unknown, so no extraction commands are generated there.
     scopes: dict[int, frozenset[str]] = field(default_factory=dict)
     global_specs: list[ValueSpec] = field(default_factory=list)
+    # Lines whose breakpoint has several locations; one can sit in another line's code.
+    multi_location: set[int] = field(default_factory=set)
 
 
 class CppCompilationError(ValueError):
@@ -288,6 +290,10 @@ def _discover(
         commands.extend(
             [
                 f"break {CPP_FILENAME}:{line}",
+                # A multi-location breakpoint is reported under the requested line even when
+                # GDB moved it to a later one (a global declaration slides into the next
+                # function); the listing names the real line.
+                "info breakpoints $bpnum",
                 f"echo {SCOPE_MARKER}{line}\\n",
                 f"info scope {CPP_FILENAME}:{line}",
                 f"echo {SCOPE_END_MARKER}\\n",
@@ -336,14 +342,18 @@ def _discover(
     break_lines: set[int] = set()
     cursor = 0
     for match in scope_pattern.finditer(output):
-        resolved = break_pattern.findall(output[cursor : match.start()])
+        segment = output[cursor : match.start()]
+        resolved = break_pattern.findall(segment)
         cursor = match.end()
         if not resolved:
             continue
-        line = int(resolved[-1][0] or resolved[-1][1])
+        located = re.search(rf"\bat\s+{re.escape(CPP_FILENAME)}:(\d+)\s*$", segment, re.MULTILINE)
+        line = int(located.group(1)) if located else int(resolved[-1][0] or resolved[-1][1])
         if not 1 <= line <= source_line_count:
             continue
         break_lines.add(line)
+        if resolved[-1][1]:
+            discovery.multi_location.add(line)
         body = match.group(2)
         if "Scope for" in body or "no locals" in body.lower():
             names = frozenset(re.findall(r"^Symbol\s+([A-Za-z_]\w*)\s+is\b", body, re.MULTILINE))
@@ -405,26 +415,99 @@ def _extraction_plan(
     # zero-tail scan is an inferior call), so each global is re-read only after a line
     # that names it has run, or after any line of a function that could alias it
     # through an array, pointer, or reference parameter. Other stops print `@same`.
-    cached = [spec.name for spec in discovery.global_specs]
-    plan[0] = [f"set $pv_dirty_{name} = 1" for name in cached]
     code = strip_code(source)
     code_lines = code.split("\n")
     aliasing_lines = _aliasing_function_lines(code, model)
     alias_names = _alias_variables(code)
+    # Local containers are cached the same way, plus their address: another call of the
+    # function (recursion, a sibling call) holds a different object under the same name.
+    # Parameters, range-for variables, and references are always re-read: they can name a
+    # different object at the same address, or one written under another name.
+    local_cached = {
+        spec.name
+        for spec in model.vectors
+        if _cacheable_local(spec, code_lines, alias_names)
+    } - {
+        spec.name
+        for spec in model.vectors
+        if not _cacheable_local(spec, code_lines, alias_names)
+    }
+    cached = [
+        *(f"$pv_dirty_{spec.name}" for spec in discovery.global_specs),
+        *(f"$pv_ldirty_{name}" for name in sorted(local_cached)),
+    ]
+    plan[0] = [
+        *(f"set {flag} = 1" for flag in cached),
+        *(f"set {flag.replace('dirty_', 'wsp_')} = 0" for flag in cached),
+        *(f"set $pv_laddr_{name} = 0" for name in sorted(local_cached)),
+    ]
+    # `m[k]` inserts into a map, so only these containers are read by a subscript.
+    subscript_reads = {spec.name for spec in (*discovery.global_specs, *model.vectors) if spec.kind in INDEXED_KINDS} - {
+        spec.name for spec in (*discovery.global_specs, *model.vectors) if spec.kind not in INDEXED_KINDS
+    }
+    # Functions and lambdas a statement can call (or hand to `sort`); an `operator<` can be
+    # entered from any container call, so then every writing statement counts.
+    user_functions = sorted(
+        {
+            *re.findall(r"\b([A-Za-z_]\w*)\s*\([^()]*\)\s*(?:const\s*)?\{", code),
+            *re.findall(r"\b([A-Za-z_]\w*)\s*=\s*\[[^\]]*\]\s*\(", code),
+        }
+        - {"if", "for", "while", "switch", "catch", "main"}
+    )
+    user_operators = bool(re.search(r"\boperator\b", code))
+    # Values some calling statement writes: only their reads compare stack pointers.
+    sticky_flags: set[str] = set()
+    alias_blocks = {
+        alias: {
+            model.block_for_line(number)
+            for number, text in enumerate(code_lines, start=1)
+            if re.search(rf"[&*]\s*{re.escape(alias)}\s*[=:]|\bauto\s+{re.escape(alias)}\s*=|[&*]\s*\[[^\]]*\b{re.escape(alias)}\b", text)
+        }
+        or {None}
+        for alias in alias_names
+    }
+    alias_targets = {alias: _alias_targets(code, alias) for alias in alias_names}
     lines = discovery.break_lines
     for position, line in enumerate(lines):
         # A statement can continue past its breakpoint line, up to the next breakpoint.
         following = lines[position + 1] if position + 1 < len(lines) else line + 1
         statement = " ".join(code_lines[line - 1 : max(line, following - 1)])
+        block = model.block_for_line(line)
+        if line in discovery.multi_location and block is not None:
+            # A second location can sit inside another line's code (a range-for in a
+            # lambda stops "on line 13" while running line 14), so any write in the
+            # function may have happened since the previous stop.
+            start, end = model.function_blocks[block]
+            statement = " ".join(code_lines[start - 1 : end])
         # `cin >> x` with `for (auto &x : a)`, or `*p = 1`, writes a global under another name.
-        through_alias = any(re.search(rf"(?<![\w.]){re.escape(alias)}\b", statement) for alias in alias_names)
-        plan[line] = [
-            f"set $pv_dirty_{name} = 1"
-            for name in cached
-            if line in aliasing_lines
-            or through_alias
-            or re.search(rf"(?<![\w.]){re.escape(name)}\b", statement)
+        # An alias only counts in the function declaring it: `place(int row)` is not `auto &row`.
+        aliased = [
+            alias_targets[alias]
+            for alias, blocks in alias_blocks.items()
+            if (None in blocks or block in blocks) and re.search(rf"(?<![\w.]){re.escape(alias)}\b", statement)
         ]
+        # It writes what it was bound to (`Edge &e = edges[id]` → `edges`), or anything
+        # when a call produced it.
+        through_alias = {name for targets in aliased if targets is not None for name in targets}
+        alias_to_all = any(targets is None for targets in aliased)
+        # Only a statement that can stop inside user code before it finishes needs the
+        # mark to survive those stops; elsewhere it would re-read a recursion's whole subtree.
+        # Static initialisation (lines outside every function) runs in a frame above
+        # `main`, so a mark made there would never clear.
+        sticky = block is not None and (
+            user_operators or bool(user_functions and re.search(rf"\b(?:{'|'.join(user_functions)})\b", statement))
+        )
+        marked = [
+            flag
+            for flag in cached
+            if line in aliasing_lines
+            or alias_to_all
+            or flag.split("dirty_", 1)[1] in through_alias
+            or _may_write(statement, flag.split("dirty_", 1)[1], flag.split("dirty_", 1)[1] in subscript_reads)
+        ]
+        if sticky:
+            sticky_flags.update(marked)
+        plan[line] = [command for flag in marked for command in _mark_dirty(flag, sticky)]
     for line in discovery.break_lines:
         scope = discovery.scopes.get(line)
         if scope is None:
@@ -438,13 +521,171 @@ def _extraction_plan(
                 visible[spec.name] = spec
         commands: list[str] = []
         for spec in visible.values():
-            commands.extend(_value_commands(VECTOR_MARKER, spec))
+            commands.extend(
+                _value_commands(
+                    VECTOR_MARKER,
+                    spec,
+                    cached=spec.name in local_cached,
+                    sticky=f"$pv_ldirty_{spec.name}" in sticky_flags,
+                )
+            )
         for spec in discovery.global_specs:
             if spec.name not in scope and spec.visible_at(line):
-                commands.extend(_value_commands(GLOBAL_MARKER, spec, cached=True))
+                commands.extend(
+                    _value_commands(GLOBAL_MARKER, spec, cached=True, sticky=f"$pv_dirty_{spec.name}" in sticky_flags)
+                )
         # Marking runs after extraction: the line itself executes after this stop.
         plan[line] = commands + plan[line]
     return plan
+
+
+def _mark_dirty(flag: str, sticky: bool = True) -> list[str]:
+    """Mark a cached value for re-reading until its statement has finished.
+
+    `inv[n] = power(x)` stops inside `power` before the assignment: a read there must not
+    clear the mark. `$pv_wsp_*` keeps the outermost marking frame's stack pointer, and a
+    read clears the mark only from that frame or a shallower one (the stack grows down).
+    """
+    if not sticky:
+        return [f"set {flag} = 1"]
+    wsp = flag.replace("dirty_", "wsp_")
+    return [
+        f"set {flag} = 1",
+        f"set {wsp} = {wsp} > (long long) $sp ? {wsp} : (long long) $sp",
+    ]
+
+
+def _clear_dirty(flag: str, sticky: bool = True) -> list[str]:
+    if not sticky:
+        return [f"set {flag} = 0"]
+    wsp = flag.replace("dirty_", "wsp_")
+    return [
+        f"set {flag} = (long long) $sp < {wsp}",
+        f"set {wsp} = {flag} ? {wsp} : 0",
+    ]
+
+
+# Calls and keywords whose parenthesised arguments are only read.
+READ_ONLY_CALLS = frozenset({
+    "if", "while", "for", "switch", "return", "max", "min", "abs", "llabs", "labs", "fabs",
+    "__gcd", "gcd", "lcm", "sqrt", "sqrtl", "pow", "powl", "log", "log2", "printf", "puts",
+    "putchar", "__builtin_popcount", "__builtin_popcountll", "__builtin_ctz", "__builtin_clz",
+    "to_string", "",
+})
+# Members that only read their container (`a.size()`), unless the result is assigned to.
+READ_ONLY_MEMBERS = frozenset({
+    "size", "empty", "length", "count", "top", "front", "back", "find", "lower_bound", "upper_bound",
+})
+_SUBSCRIPTS = r"(?:\s*\[(?:[^\[\]]|\[(?:[^\[\]]|\[[^\[\]]*\])*\])*\])*"
+
+
+INDEXED_KINDS = frozenset({"array", "matrix", "vector", "nested", "bits", "vector_array", "string", "deque"})
+
+
+def _may_write(statement: str, name: str, subscript_reads: bool = True) -> bool:
+    """Whether a statement can change `name`; reading it (`d[x][y] != -1`) cannot.
+
+    Any occurrence that is not plainly read counts as a write: assignment, `++`/`--`,
+    `cin >>`, `&name`, a member call other than a read-only one, or an argument of a
+    call that could take it by reference (`swap(a[i], a[j])`, `sort(a, a + n)`).
+    """
+    for match in re.finditer(rf"(?<![\w.]){re.escape(name)}\b(?!\s*::)", statement):
+        before = statement[: match.start()].rstrip()
+        rest = statement[match.end():]
+        subscripts = re.match(_SUBSCRIPTS, rest)
+        after = rest[subscripts.end():].lstrip()
+        if subscripts.group(0) and not subscript_reads:
+            return True
+        if re.match(r"(?:[-+*/%^|&]|<<|>>)?=(?!=)|\+\+|--", after):
+            return True
+        if before.endswith(("++", "--", "&", ">>")) and not before.endswith("&&"):
+            return True
+        # A declaration (`vector<int> d(n);`, `int a[5];`) creates the object.
+        word = re.search(r"([A-Za-z_]\w*)$", before)
+        if (before.endswith(">") and not before.endswith("->")) or (
+            word and word.group(1) not in {"return", "else", "case", "do", "throw"}
+        ):
+            return True
+        # `(d % 2 ? white : black).push_back(x)`: the group's result is written.
+        if _enclosing_call(before) == "" and re.match(
+            r"\s*(?:\.|->|\[|(?:[-+*/%^|&]|<<|>>)?=(?!=)|\+\+|--)", _after_group(after)
+        ):
+            return True
+        member = re.match(r"(?:(?:\.|->)\s*\w+\s*)+", after)
+        if member:
+            tail = after[member.end():]
+            last = re.findall(r"\w+", member.group(0))[-1]
+            if tail.startswith("("):
+                # A method call: only a few never change their object.
+                if last not in READ_ONLY_MEMBERS or re.match(r"\([^()]*\)\s*(?:(?:[-+*/%^|&]|<<|>>)?=(?!=)|\+\+|--)", tail):
+                    return True
+            elif re.match(r"(?:[-+*/%^|&]|<<|>>)?=(?!=)|\+\+|--|\[", tail):
+                # `e[i].cap -= 1`, `p.first++`, or a subscripted member.
+                return True
+            elif before.endswith(("(", ",")) and _enclosing_call(before) not in READ_ONLY_CALLS:
+                return True
+            continue
+        if before.endswith(("(", ",")) and _enclosing_call(before) not in READ_ONLY_CALLS:
+            return True
+    return False
+
+
+def _enclosing_call(before: str) -> str | None:
+    """The function or keyword whose argument list is still open at the end of `before`."""
+    depth = 0
+    for position in range(len(before) - 1, -1, -1):
+        character = before[position]
+        if character == ")":
+            depth += 1
+        elif character == "(":
+            if depth == 0:
+                callee = re.search(r"([A-Za-z_]\w*)\s*$", before[:position])
+                return callee.group(1) if callee else ""
+            depth -= 1
+    # A top-level comma: the next declarator of `vector<int> p(n), q(n);`.
+    return None
+
+
+def _after_group(rest: str) -> str:
+    """The text after the parenthesis that closes the group `rest` starts inside."""
+    depth = 0
+    for position, character in enumerate(rest):
+        if character == "(":
+            depth += 1
+        elif character == ")":
+            if depth == 0:
+                return rest[position + 1 :]
+            depth -= 1
+    return ""
+
+
+ALIAS_SAFE_CALLS = frozenset({"begin", "end", "rbegin", "rend", "find", "lower_bound", "upper_bound", "back", "front", "top", "data", "at"})
+
+
+def _alias_targets(code: str, alias: str) -> frozenset[str] | None:
+    """Names an alias can point into: every expression it is bound or reassigned to.
+
+    None (anything) when one of them calls a function, which could return any reference.
+    """
+    targets: set[str] = set()
+    # `auto &[u, v] : edges` binds `u` through the whole bracket.
+    pattern = rf"(?<![\w.]){re.escape(alias)}\s*(?:,[\w\s,]*)?(?:\]\s*)?(?:=(?!=)|:(?!:))([^;]*)"
+    if not re.search(pattern, code):
+        return None
+    for match in re.finditer(pattern, code):
+        expression = match.group(1)
+        calls = set(re.findall(r"\b([A-Za-z_]\w*)\s*\(", expression))
+        if calls - ALIAS_SAFE_CALLS - {"for", "if", "while"}:
+            return None
+        targets.update(re.findall(r"\b[A-Za-z_]\w*\b", expression))
+    return frozenset(targets)
+
+
+def _cacheable_local(spec: ValueSpec, code_lines: list[str], alias_names: set[str]) -> bool:
+    if spec.parameter or spec.name in alias_names:
+        return False
+    declaration = code_lines[spec.declaration_line - 1] if 0 < spec.declaration_line <= len(code_lines) else ""
+    return not re.search(rf"[&*]\s*{re.escape(spec.name)}\b", declaration)
 
 
 def _alias_variables(code: str) -> set[str]:
@@ -556,7 +797,7 @@ def _decode_timeout_output(value: str | bytes | None) -> str:
     return value
 
 
-def _value_commands(marker: str, spec: ValueSpec, cached: bool = False) -> list[str]:
+def _value_commands(marker: str, spec: ValueSpec, cached: bool = False, sticky: bool = True) -> list[str]:
     name = spec.name
     commands: list[str] = []
     if spec.kind == "vector":
@@ -590,11 +831,22 @@ def _value_commands(marker: str, spec: ValueSpec, cached: bool = False) -> list[
         commands.extend([f"echo {HEAP_MARKER}\\n", *_sequence_commands(f"{name}.c", MAX_VALUE_ITEMS)])
     else:
         commands.append(f"output {name}")
-    if cached:
+    if cached and marker == VECTOR_MARKER:
+        address = f"(long long) &{name}"
+        commands = [
+            f"if $pv_ldirty_{name} || $pv_laddr_{name} != {address}",
+            *commands,
+            *_clear_dirty(f"$pv_ldirty_{name}", sticky),
+            f"set $pv_laddr_{name} = {address}",
+            "else",
+            f"echo {SAME_VALUE}",
+            "end",
+        ]
+    elif cached:
         commands = [
             f"if $pv_dirty_{name}",
             *commands,
-            f"set $pv_dirty_{name} = 0",
+            *_clear_dirty(f"$pv_dirty_{name}", sticky),
             "else",
             f"echo {SAME_VALUE}",
             "end",
@@ -906,8 +1158,6 @@ def _parse_step_block(
     if not frame_match:
         return None
     function_name = frame_match.group(1).strip()
-    if COMPILER_GENERATED_FUNCTION.match(function_name):
-        return None
     line = int(frame_match.group(2))
 
     extracted_locals = _parse_marked_values(locals_text, VECTOR_MARKER)
@@ -920,6 +1170,18 @@ def _parse_step_block(
                 else:
                     del extracted_globals[name]
         last_globals.update(extracted_globals)
+        # Cached locals share the dict under a prefix no C++ name can have.
+        for name, value in list(extracted_locals.items()):
+            if value == SAME_VALUE:
+                if f"local:{name}" in last_globals:
+                    extracted_locals[name] = last_globals[f"local:{name}"]
+                else:
+                    del extracted_locals[name]
+            else:
+                last_globals[f"local:{name}"] = value
+    # Static initialisation is not shown, but a global it read is cached from then on.
+    if COMPILER_GENERATED_FUNCTION.match(function_name):
+        return None
     plain_locals_text = re.sub(
         rf"(?:{VECTOR_MARKER}|{GLOBAL_MARKER}).*?{VECTOR_END_MARKER}",
         "",
@@ -933,13 +1195,19 @@ def _parse_step_block(
         if _declared_before(model, name, line) and name not in model.line_declarations.get(line, ())
     }
     variables = {**arguments, **local_values, **extracted_locals}
-    serialized = {
-        name: _serialize_cpp_value(value, f"{function_name}:{name}")
-        for name, value in variables.items()
-        if name != "this"
-    }
-    # Globals mostly repeat unchanged between stops; parsing a table again is the slow part.
+    # Containers mostly repeat unchanged between stops; parsing a table again is the slow part.
     cache = parsed_values if parsed_values is not None else {}
+    serialized = {}
+    for name, value in variables.items():
+        if name == "this":
+            continue
+        path = f"{function_name}:{name}"
+        if name not in extracted_locals:
+            serialized[name] = _serialize_cpp_value(value, path)
+            continue
+        if (path, value) not in cache:
+            cache[(path, value)] = _serialize_cpp_value(value, path)
+        serialized[name] = cache[(path, value)]
     globals_ = {}
     for name, value in extracted_globals.items():
         if name in serialized:

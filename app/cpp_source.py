@@ -124,6 +124,8 @@ class ValueSpec:
     ready_line: int = 0
     scope_end_line: int = 0
     end_inclusive: bool = True
+    # Declared inside parentheses: a function parameter or a range-for variable.
+    parameter: bool = False
 
     def visible_at(self, line: int) -> bool:
         if line <= self.ready_line:
@@ -561,6 +563,7 @@ def _vector_declarations(
                             ready_line=index.line_of(ready),
                             scope_end_line=index.line_of(scope_end),
                             end_inclusive=inclusive,
+                            parameter=parameter_like,
                         )
                     )
             if parameter_like:
