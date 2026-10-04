@@ -5,7 +5,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from .analyzer import analyze_execution
 from .tracer import DEFAULT_MAX_STEPS
@@ -33,6 +33,7 @@ def run_debugger(
     language: str = "python",
     timeout_seconds: float | None = None,
     max_steps: int = DEFAULT_MAX_STEPS,
+    extra_views: Iterable[str] = (),
 ) -> dict[str, Any]:
     if timeout_seconds is None:
         timeout_seconds = CPP_TIMEOUT_SECONDS if language == "cpp" else DEFAULT_TIMEOUT_SECONDS
@@ -45,6 +46,7 @@ def run_debugger(
                 stdin_text=stdin_text,
                 timeout_seconds=timeout_seconds,
                 max_steps=max_steps,
+                extra_views=extra_views,
             )
         except CppExecutionTimeoutError as error:
             raise ExecutionTimeoutError(str(error)) from error
@@ -116,7 +118,7 @@ def run_debugger(
 
     result["language"] = "python"
     _mark_exception_origin(result["steps"])
-    result["algorithm"] = analyze_execution(source, result["steps"], language="python")
+    result["algorithm"] = analyze_execution(source, result["steps"], language="python", extra_views=extra_views)
     return result
 
 

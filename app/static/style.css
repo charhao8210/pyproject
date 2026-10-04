@@ -1045,7 +1045,15 @@ h2 {
     white-space: nowrap;
 }
 
+/* Each legend entry is its own hover target (`data-term`), swatch and words together. */
+.usage-legend > span {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
 .usage-swatch {
+    display: inline-block;
     width: 12px;
     height: 12px;
     margin-left: 6px;
@@ -2397,4 +2405,27 @@ a.button {
     .help-terms dd {
         margin-bottom: 8px;
     }
+}
+
+/* The graph's edge-direction override, inline in its summary line. */
+.graph-direction-select {
+    margin-left: 8px;
+    padding: 1px 4px;
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    color: var(--pencil);
+    background: var(--sheet-raised);
+    font-family: var(--mono);
+    font-size: 12px;
+}
+
+/* Hovering `row ↪ matrix[1]` outlines matrix's row 1 in the view and in Variables. */
+.is-alias-target {
+    outline: 2px solid var(--ink);
+    outline-offset: -2px;
+}
+
+.reference-value[data-alias-name] {
+    cursor: help;
+    text-decoration: underline dotted;
 }

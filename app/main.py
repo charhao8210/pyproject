@@ -106,6 +106,7 @@ def debug_code(payload: DebugRequest) -> dict:
             payload.code,
             stdin_text=payload.stdin,
             language=payload.language,
+            extra_views=payload.views,
         )
         _mark_large_integers(result)
         return result

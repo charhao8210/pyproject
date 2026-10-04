@@ -331,3 +331,19 @@ def test_help_page_and_hover_terms() -> None:
     for label in ("Visited", "Frontier", "Current", "Reading", "Written", "New", "Blocked", "Edge being checked", "Returned"):
         assert f'term: "{label}"' in terms
     assert "item.dataset.term = label" in script and "DebuggerTerms" in script
+
+
+def test_graph_direction_switch_pending_views_and_nested_references() -> None:
+    script = Path("app/static/app.js").read_text(encoding="utf-8")
+    terms = Path("app/static/terms.js").read_text(encoding="utf-8")
+    # A symmetric directed graph can be redrawn directed; only one parallel edge is checked.
+    assert "function graphDirectionPicker" in script and "view.undirected.map" in script
+    assert "checkedDrawn" in script
+    # Views past the precomputed ones are listed and fetched by running again.
+    assert "async function loadView" in script and "views: [...state.extraViews, viewId]" in script
+    # `row = matrix[1]` names its path; objects list fields by name.
+    assert "function objectPath" in script and "function isObjectFields" in script
+    # Hovering `row ↪ matrix[1]` outlines that row where matrix is drawn.
+    assert "function aliasTargets" in script and ".is-alias-target" in Path("app/static/style.css").read_text(encoding="utf-8")
+    assert 'term: "Edge direction"' in terms and 'term: "pairs read as"' in terms
+    assert "\x00" not in script

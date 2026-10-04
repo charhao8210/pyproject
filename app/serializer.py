@@ -82,6 +82,10 @@ def serialize_value(
             },
         }
 
+    fields = _instance_fields(value)
+    if fields is not None:
+        return _serialize_instance(value, fields, context, depth)
+
     type_name = type(value).__name__
     return {
         "type": "object",
@@ -89,6 +93,54 @@ def serialize_value(
         "object_id": id(value),
         "value": f"<{type_name}>",
     }
+
+
+# Program structure, never an object whose fields are state.
+_NOT_INSTANCES = (
+    type, types.ModuleType, types.SimpleNamespace, types.MethodType, types.BuiltinFunctionType,
+    types.GeneratorType, types.CodeType, types.FrameType,
+)
+
+
+def _instance_fields(value: Any) -> dict[str, Any] | None:
+    """An instance of a class the program defined: its own attributes (`vars`, which reads the
+    instance dict and never runs a property or `__getattr__`)."""
+    if isinstance(value, _NOT_INSTANCES) or type(value).__module__ == "builtins":
+        return None
+    try:
+        fields = vars(value)
+    except TypeError:
+        return None
+    return dict(fields) if isinstance(fields, dict) else None
+
+
+def _serialize_instance(
+    value: Any,
+    fields: dict[str, Any],
+    context: SerializationContext,
+    depth: int,
+) -> dict[str, Any]:
+    """`head = Node(10)` as `{value: 10, next: ...}`: a dict of its fields carrying the class
+    name, so Variables lists the fields and marks the ones a line changes (20 -> 99)."""
+    object_id = id(value)
+    if object_id in context.seen:
+        return {"type": "reference", "object_id": object_id}
+    context.seen.add(object_id)
+    result: dict[str, Any] = {"type": "dict", "class_name": type(value).__name__, "object_id": object_id}
+    if depth >= context.max_depth:
+        result["truncated"] = True
+        return result
+    names = [name for name in fields if not name.startswith("__")]
+    result["entries"] = [
+        {
+            "key": {"type": "str", "value": name},
+            "value": serialize_value(fields[name], context=context, depth=depth + 1),
+        }
+        for name in names[: context.max_items]
+    ]
+    if len(names) > context.max_items:
+        result["truncated"] = True
+    return result
 
 
 def _serialize_container(

@@ -42,6 +42,12 @@ const state = {
     objectLabels: new Map(),
     objectTypes: new Map(),
     algorithmGraphPositions: new Map(),
+    // Edge direction for graph views: "auto" (the trace's guess), "directed" or "undirected".
+    graphDirection: "auto",
+    // The run the trace came from, and views asked for beyond the precomputed ones.
+    lastRun: null,
+    extraViews: [],
+    loadingView: null,
     recursionPositions: new Map(),
     callChainPositions: new Map(),
     playback: {
@@ -322,6 +328,7 @@ function effectiveView() {
 function currentVisualization(step) {
     const view = effectiveView();
     if (!view) return step.visualization;
+    if (view.pending) return {renderer: view.renderer, ready: false, pending: true, name: view.variable};
     return step.views?.[view.id] || {renderer: view.renderer, ready: false};
 }
 
@@ -343,7 +350,11 @@ function updateViewSelects() {
     const variables = view?.variable
         ? availableViews().filter((item) => item.renderer === view.renderer).map((item) => item.variable)
         : [];
-    elements.viewVariableSelect.replaceChildren(...variables.map((name) => new Option(name, name)));
+    // Variables past the precomputed ones are still listed; picking one runs the program again.
+    const pending = new Set(availableViews().filter((item) => item.renderer === view?.renderer && item.pending).map((item) => item.variable));
+    elements.viewVariableSelect.replaceChildren(
+        ...variables.map((name) => new Option(pending.has(name) ? `${name} (runs again)` : name, name)),
+    );
     elements.viewVariableSelect.hidden = !variables.length;
     if (view?.variable) elements.viewVariableSelect.value = view.variable;
 }
@@ -352,6 +363,36 @@ function chooseView(renderer, variable) {
     state.view = {renderer, variable};
     updateViewSelects();
     if (state.result?.steps.length) renderStep();
+    const view = effectiveView();
+    if (view?.pending) loadView(view.id);
+}
+
+// Run the same program again asking for one more view (`DebugRequest.views`), then show it at
+// the same step. Only the first few views per kind are computed up front, to keep traces small.
+async function loadView(viewId) {
+    if (!state.lastRun || state.loadingView) return;
+    state.loadingView = viewId;
+    const step = state.currentStep;
+    try {
+        const response = await fetch("/api/debug", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({...state.lastRun, views: [...state.extraViews, viewId]}),
+        });
+        const payload = await response.json();
+        if (!response.ok) throw new Error(apiErrorMessage(payload));
+        state.extraViews = [...state.extraViews, viewId];
+        state.result = payload;
+        state.currentStep = Math.min(step, Math.max(0, payload.steps.length - 1));
+        indexObjects(payload.steps);
+        configureViewSelects();
+        configureTimeline();
+        if (payload.steps.length) renderStep();
+    } catch (error) {
+        setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+        state.loadingView = null;
+    }
 }
 
 function renderEditorHighlight() {
@@ -653,6 +694,8 @@ async function runCode() {
             headers: {"Content-Type": "application/json"},
             body: JSON.stringify({code, stdin, language: state.language}),
         });
+        state.lastRun = {code, stdin, language: state.language};
+        state.extraViews = [];
         const payload = await response.json();
         if (!response.ok) {
             // Syntax and compile errors cannot run, so point at the rejected lines in the editor.
@@ -926,6 +969,7 @@ function renderVariables(step, visualization) {
             scalars.append(textSpan("global", "scalar-group"));
         }
         const card = document.createElement(isScalar ? "div" : "article");
+        card.dataset.variable = name;
         card.className = isScalar ? "scalar-row" : "variable-card";
         // Yellow: used by the line about to run. Orange: changed by the line that just ran.
         card.classList.toggle("is-on-line", onLine.has(name));
@@ -1074,6 +1118,11 @@ function renderValue(value, depth, changes = null) {
     if (value.type === "reference") {
         const reference = textSpan(referenceText(value.object_id), "reference-value");
         reference.dataset.term = "same list as";
+        const target = referenceTarget(value.object_id);
+        if (target) {
+            reference.dataset.aliasName = target.name;
+            reference.dataset.aliasIndex = target.index === null ? "" : String(target.index);
+        }
         return reference;
     }
     if (value.type === "str") {
@@ -1100,6 +1149,7 @@ function renderValue(value, depth, changes = null) {
         items.forEach((item, index) => {
             const cell = document.createElement("div");
             cell.className = "array-cell";
+            cell.dataset.index = String(index);
             if (changedItems.has(index)) cell.classList.add("is-changed-cell");
             const indexNode = document.createElement("div");
             indexNode.className = "array-index";
@@ -1145,7 +1195,8 @@ function renderValue(value, depth, changes = null) {
             if (changedItems.has(position)) row.classList.add("is-changed-cell");
             const key = document.createElement("div");
             key.className = "dict-key";
-            key.textContent = compactValue(entry.key);
+            // An object's fields read as plain names (`value`), a dict's keys as values (`"a"`).
+            key.textContent = isObjectFields(value) ? String(entry.key?.value) : compactValue(entry.key);
             const item = document.createElement("div");
             item.className = "dict-value";
             item.append(renderValue(entry.value, depth + 1));
@@ -1216,6 +1267,7 @@ function renderTableValue(value, changedCells = new Set()) {
             const item = rows[row]?.[column];
             const text = !item || item.value === "\0" ? "" : compactValue(item);
             const cell = textSpan(text, "table-cell");
+            cell.dataset.row = String(row);
             if (changedCells.has(`${row}:${column}`)) cell.classList.add("is-changed-cell");
             table.append(cell);
         }
@@ -1254,6 +1306,11 @@ function numberText(value) {
     return value.text ?? String(value.value);
 }
 
+// An instance of a class the program defined (`Node`), serialized as a dict of its fields.
+function isObjectFields(value) {
+    return value?.type === "dict" && Boolean(value.class_name) && value.class_name !== "dict";
+}
+
 function compactValue(value, depth = 0) {
     if (!value) return "—";
     if (value.type === "reference") return referenceText(value.object_id);
@@ -1269,9 +1326,10 @@ function compactValue(value, depth = 0) {
         return `${brackets[0]}${items.join(", ")}${brackets[1]}`;
     }
     if (value.type === "dict") {
-        const items = (value.entries || []).slice(0, 3).map((entry) => `${compactValue(entry.key, 1)}: ${compactValue(entry.value, 1)}`);
+        const fieldKey = (entry) => (isObjectFields(value) ? String(entry.key?.value) : compactValue(entry.key, 1));
+        const items = (value.entries || []).slice(0, 3).map((entry) => `${fieldKey(entry)}: ${compactValue(entry.value, 1)}`);
         if ((value.entries || []).length > 3 || value.truncated) items.push("…");
-        return `{${items.join(", ")}}`;
+        return `${isObjectFields(value) ? value.class_name : ""}{${items.join(", ")}}`;
     }
     if (value.type === "range") return `range(${value.value.start}, ${value.value.stop}, ${value.value.step})`;
     return String(value.value ?? `<${displayType(value)}>`);
@@ -1312,7 +1370,9 @@ function objectLabel(objectId) {
 }
 
 // `b = a` makes b a second name for a's list: say so by name, `↪ same list as a`, instead of an
-// object number shown nowhere else. Falls back to the number when no variable holds it directly.
+// object number shown nowhere else. A part of another container is named by its path:
+// `row = matrix[1]` reads `↪ matrix[1]`, an object's field `↪ head.next`. Falls back to the
+// number when no variable reaches the object within a few levels.
 function referenceText(objectId) {
     const step = state.result?.steps?.[state.currentStep];
     const scopes = [step?.locals || {}, step?.globals || {}];
@@ -1323,7 +1383,73 @@ function referenceText(objectId) {
             }
         }
     }
+    for (const scope of scopes) {
+        for (const [name, value] of Object.entries(scope)) {
+            const path = objectPath(value, objectId, name, 0);
+            if (path) return `↪ ${path}`;
+        }
+    }
     return `↪ ${objectLabel(objectId)}`;
+}
+
+// The variable holding `objectId` and, for a part of it, the first index (`matrix[1]` → matrix, 1),
+// so hovering `row ↪ matrix[1]` can light up that row wherever matrix is drawn.
+function referenceTarget(objectId) {
+    const text = referenceText(objectId).replace(/^↪ (same \w+ as )?/, "");
+    const match = text.match(/^([A-Za-z_]\w*)(?:\[(\d+)\])?/);
+    if (!match || text.startsWith("Object") || /^(List|Dict|Tuple|Set) #/.test(text)) return null;
+    return {name: match[1], index: match[2] === undefined ? null : Number(match[2])};
+}
+
+function aliasTargets(name, index) {
+    const found = [];
+    // The algorithm view, when it draws that variable: a grid row, or one bar / cell.
+    if (elements.algorithmView.dataset.view === name) {
+        const selector = index === null
+            ? ".algorithm-cell, .array-column, .cells-item"
+            : `.algorithm-cell[data-row="${index}"], .array-column[data-index="${index}"], .cells-item[data-index="${index}"]`;
+        found.push(...elements.algorithmView.querySelectorAll(selector));
+    }
+    // Its card in Variables: that entry, or that row of a table.
+    const card = elements.variables.querySelector(`[data-variable="${CSS.escape(name)}"]`);
+    if (card) {
+        if (index === null) found.push(card);
+        else found.push(...card.querySelectorAll(`.array-cell[data-index="${index}"], .table-cell[data-row="${index}"]`));
+    }
+    return found;
+}
+
+let aliasLit = [];
+document.addEventListener("mouseover", (event) => {
+    const reference = event.target.closest?.("[data-alias-name]");
+    aliasLit.forEach((element) => element.classList.remove("is-alias-target"));
+    aliasLit = reference
+        ? aliasTargets(reference.dataset.aliasName, reference.dataset.aliasIndex === "" ? null : Number(reference.dataset.aliasIndex))
+        : [];
+    aliasLit.forEach((element) => element.classList.add("is-alias-target"));
+});
+
+// Where `objectId` sits inside `value`, written as code (`matrix[1]`, `head.next`), or null.
+function objectPath(value, objectId, path, depth) {
+    if (!value || value.type === "reference" || depth > 3) return null;
+    if (depth > 0 && value.object_id !== undefined && String(value.object_id) === String(objectId)) return path;
+    if (Array.isArray(value.items)) {
+        for (let index = 0; index < value.items.length; index += 1) {
+            const found = objectPath(value.items[index], objectId, `${path}[${index}]`, depth + 1);
+            if (found) return found;
+        }
+    }
+    if (Array.isArray(value.entries)) {
+        // An object's fields read as `.name`; a dict's keys as `[key]`.
+        const isObject = value.type === "dict" && value.class_name && value.class_name !== "dict";
+        for (const entry of value.entries) {
+            const key = entry.key?.value;
+            const step = isObject ? `.${key}` : `[${compactValue(entry.key)}]`;
+            const found = objectPath(entry.value, objectId, `${path}${step}`, depth + 1);
+            if (found) return found;
+        }
+    }
+    return null;
 }
 
 function titleCase(value) {
@@ -1461,6 +1587,12 @@ function renderAlgorithmProfile(profile) {
 function renderAlgorithm(visualization) {
     elements.algorithmView.replaceChildren();
     elements.algorithmView.className = "algorithm-canvas";
+    // Which variable is drawn, so a reference to it (`row ↪ matrix[1]`) can light up its part.
+    elements.algorithmView.dataset.view = visualization?.name || "";
+    if (visualization?.pending) {
+        renderAlgorithmWaiting(`Running the program again to draw ${visualization.name}…`);
+        return;
+    }
     if (!visualization) {
         renderAlgorithmWaiting("No visualization state is available for this step.");
         return;
@@ -1552,6 +1684,7 @@ function renderGridAlgorithm(view) {
             const key = `${rowIndex}:${columnIndex}`;
             const cell = document.createElement("div");
             cell.className = "algorithm-cell";
+            cell.dataset.row = String(rowIndex);
             if (walls.has(key) || String(value) === "#") cell.classList.add("wall");
             if (visited.has(key)) cell.classList.add("visited");
             if (frontier.has(key)) cell.classList.add("frontier");
@@ -1654,6 +1787,7 @@ function renderArrayAlgorithm(view) {
     values.forEach((value, index) => {
         const column = document.createElement("div");
         column.className = "array-column";
+        column.dataset.index = String(index);
         const indexMarkers = markers.get(index) || [];
         indexMarkers.forEach((marker) => column.classList.add(marker.role));
         // Marked indexes (for example the fixed `i` in three-sum) stay visible outside the window.
@@ -1723,7 +1857,7 @@ function indexedViewMeta(view, count) {
     // A list too long to read whole says how much is drawn: `a, 0–49 of 80`.
     const size = view.length
         ? `0–${count - 1} of ${view.length} items (the rest was not read)`
-        : `${count} items${view.truncated ? ", clipped" : ""}`;
+        : count ? `${count} items${view.truncated ? ", clipped" : ""}` : "empty";
     summary.textContent = `${view.name || "array"}, ${size}${view.carried ? ", last known state" : ""}`;
     if (view.carried) summary.dataset.term = "last known state";
     else if (view.truncated || view.length) summary.dataset.term = "clipped";
@@ -1785,6 +1919,7 @@ function renderCellsAlgorithm(view) {
     values.forEach((value, index) => {
         const item = document.createElement("div");
         item.className = "cells-item";
+        item.dataset.index = String(index);
         const indexMarkers = markers.get(index) || [];
         indexMarkers.forEach((marker) => item.classList.add(marker.role));
         if (interval && !indexMarkers.length && (index < interval.low || index > interval.high)) {
@@ -1806,6 +1941,31 @@ function renderCellsAlgorithm(view) {
         row.append(item);
     });
     elements.algorithmView.append(row);
+}
+
+// The user's choice of edge direction for graphs: "auto" follows the trace's guess.
+function graphIsDirected(view) {
+    if (state.graphDirection === "directed") return true;
+    if (state.graphDirection === "undirected") return false;
+    return Boolean(view.directed);
+}
+
+function graphDirectionPicker(view) {
+    const picker = document.createElement("select");
+    picker.className = "graph-direction-select";
+    picker.setAttribute("aria-label", "Edge direction");
+    picker.dataset.term = "Edge direction";
+    picker.append(
+        new Option(`auto (${view.directed ? "directed" : "undirected"})`, "auto"),
+        new Option("directed", "directed"),
+        new Option("undirected", "undirected"),
+    );
+    picker.value = state.graphDirection;
+    picker.addEventListener("change", () => {
+        state.graphDirection = picker.value;
+        renderStep();
+    });
+    return picker;
 }
 
 function renderGraphAlgorithm(view) {
@@ -1832,11 +1992,18 @@ function renderGraphAlgorithm(view) {
     } else {
         summary.textContent = `${view.name || "graph"}, ${nodes.length} vertices`;
     }
-    // Whether each edge was stored one way (arrows) or both ways, decided from the whole trace.
+    // Whether each edge was stored one way (arrows) or both ways is guessed from the whole
+    // trace; a symmetric directed graph looks undirected, so the user can override the guess.
+    const directed = forest || graphIsDirected(view);
+    const edges = directed || !view.undirected ? view.edges || [] : view.undirected.map((position) => view.edges[position]);
     if (!forest && view.directed !== undefined) {
-        const direction = textSpan(view.directed ? " · directed" : " · undirected", "graph-direction");
-        direction.dataset.term = view.directed ? "directed" : "undirected";
-        summary.append(direction);
+        summary.append(graphDirectionPicker(view));
+    }
+    if (view.pair_order) {
+        // Which element of each adjacency pair was taken for the vertex; inferred, so said.
+        const order = textSpan(` · pairs read as ${view.pair_order}`, "graph-direction");
+        order.dataset.term = "pairs read as";
+        summary.append(order);
     }
     const legend = forest ? [["active", "Current"]] : [["active", "Current"], ["visited", "Visited"]];
     if (view.checking) legend.push(["checking", "Edge being checked"]);
@@ -1846,7 +2013,7 @@ function renderGraphAlgorithm(view) {
     // An answer path being built (`route`): its vertices and the edges between them, in order.
     const routeNodes = view.route ? [...view.route.items, ...(view.route.next ? [view.route.next] : [])] : [];
     const routeVertices = new Set(routeNodes);
-    const routeEdges = new Set(routeNodes.slice(1).map((node, index) => [routeNodes[index], node].sort().join(" ")));
+    const routeEdges = new Set(routeNodes.slice(1).map((node, index) => [routeNodes[index], node].sort().join("|")));
     if (routeNodes.length) legend.push(["route", "Route"]);
     if (view.frontier) legend.push(["frontier", `In ${view.frontier.name}`]);
     meta.append(summary, algorithmLegend(legend));
@@ -1890,7 +2057,7 @@ function renderGraphAlgorithm(view) {
     const visited = new Set((view.visited || []).map(String));
     const queued = new Set(frontier.map(String));
     const svg = svgElement("svg", {class: "algorithm-graph-svg", viewBox: `0 0 ${width} ${height}`, width, height});
-    if (view.directed) {
+    if (directed) {
         const defs = svgElement("defs");
         const marker = svgElement("marker", {
             id: "graph-arrow", viewBox: "0 0 10 10", refX: "10", refY: "5",
@@ -1902,9 +2069,9 @@ function renderGraphAlgorithm(view) {
     }
     // Edges joining the same two vertices (a parallel edge, or a→b beside b→a) bend apart, so
     // each one and its weight stay visible; a lone edge is straight.
-    const pairKey = (edge) => [String(edge.source), String(edge.target)].sort().join(" ");
+    const pairKey = (edge) => [String(edge.source), String(edge.target)].sort().join("|");
     const pairSizes = new Map();
-    (view.edges || []).forEach((edge) => pairSizes.set(pairKey(edge), (pairSizes.get(pairKey(edge)) || 0) + 1));
+    edges.forEach((edge) => pairSizes.set(pairKey(edge), (pairSizes.get(pairKey(edge)) || 0) + 1));
     const pairSeen = new Map();
     const edgeBend = (edge) => {
         const key = pairKey(edge);
@@ -1932,7 +2099,7 @@ function renderGraphAlgorithm(view) {
         const dx = target.x - control.x;
         const dy = target.y - control.y;
         const length = Math.hypot(dx, dy) || 1;
-        const inset = view.directed ? nodeRadius + 3 : 0;
+        const inset = directed ? nodeRadius + 3 : 0;
         const end = {x: target.x - (dx / length) * inset, y: target.y - (dy / length) * inset};
         path.setAttribute("d", `M ${source.x} ${source.y} Q ${control.x} ${control.y} ${end.x} ${end.y}`);
     };
@@ -1944,18 +2111,30 @@ function renderGraphAlgorithm(view) {
         text.setAttribute("y", 0.25 * source.y + 0.5 * control.y + 0.25 * target.y + normal.y * 10 * side);
     };
     const edgeElements = [];
-    (view.edges || []).forEach((edge) => {
+    // The checked edge is one edge: matched by direction when drawn directed, and by weight,
+    // so of two parallel edges (`1 → 3` weights 2 and 4) only the one being examined lights up.
+    let checkedDrawn = false;
+    const isChecked = (edge) => {
+        const check = view.checking;
+        if (!check || checkedDrawn) return false;
+        const ends = directed
+            ? String(edge.source) === String(check.source) && String(edge.target) === String(check.target)
+            : pairKey(edge) === pairKey(check);
+        return ends && (check.weight === undefined || String(edge.weight) === String(check.weight));
+    };
+    edges.forEach((edge) => {
         const source = positions.get(String(edge.source));
         const target = positions.get(String(edge.target));
         if (!source || !target) return;
         const bend = edgeBend(edge);
         const line = svgElement("path", {class: "algorithm-graph-edge"});
         // The edge from the current vertex to the neighbour the code is looking at.
-        const checked = view.checking && [edge.source, edge.target].map(String).sort().join(" ")
-            === [view.checking.source, view.checking.target].map(String).sort().join(" ");
-        if (checked) line.classList.add("checking");
+        if (isChecked(edge)) {
+            line.classList.add("checking");
+            checkedDrawn = true;
+        }
         if (routeEdges.has(pairKey(edge))) line.classList.add("on-route");
-        if (view.directed) line.setAttribute("marker-end", "url(#graph-arrow)");
+        if (directed) line.setAttribute("marker-end", "url(#graph-arrow)");
         placeEdge(line, edge, source, target, bend);
         svg.append(line);
         let weight = null;

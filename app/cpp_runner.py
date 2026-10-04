@@ -8,7 +8,7 @@ import tempfile
 import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from .analyzer import analyze_execution
 from .cpp_source import (
@@ -125,6 +125,7 @@ def run_cpp_debugger(
     stdin_text: str = "",
     timeout_seconds: float = 3.0,
     max_steps: int = 5_000,
+    extra_views: Iterable[str] = (),
 ) -> dict[str, Any]:
     compiler = shutil.which("g++")
     debugger = shutil.which("gdb")
@@ -228,7 +229,7 @@ def run_cpp_debugger(
         "status": status,
         "error": error,
     }
-    result["algorithm"] = analyze_execution(source, steps, language="cpp")
+    result["algorithm"] = analyze_execution(source, steps, language="cpp", extra_views=extra_views)
     return result
 
 

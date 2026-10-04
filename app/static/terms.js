@@ -15,6 +15,8 @@
         {group: "視覺化圖的標記", term: "Edge being checked", tip: "目前節點正在檢查的那條邊（黃色粗線）。"},
         {group: "視覺化圖的標記", term: "directed", tip: "有向圖：每條邊只存了一個方向（例如只有 adj[a].push_back(b)），所以畫箭頭。兩點之間有多條邊時會畫成分開的弧線。"},
         {group: "視覺化圖的標記", term: "undirected", tip: "無向圖：每條邊兩個方向都存了（adj[a] 和 adj[b] 都有），所以每條邊只畫一次、不畫箭頭。"},
+        {group: "視覺化圖的標記", term: "Edge direction", tip: "邊的方向是從資料猜的：每條邊兩個方向都存了就當成無向圖。但有向圖也可能剛好兩個方向都有（1→2 和 2→1），猜錯時在這裡改成 directed 或 undirected。"},
+        {group: "視覺化圖的標記", term: "pairs read as", tip: "帶權重的鄰接表存的是 pair，這裡寫出哪一個被當成節點、哪一個被當成權重。是從程式碼（例如 w = e.first、auto [v, w]）判斷的。"},
         {group: "視覺化圖的標記", term: "∞", tip: "INF（例如 1e9、0x3f3f3f3f）這種「還沒算出來」的佔位值。畫成虛線短柱，不參與長條高度的縮放；滑鼠停在上面可看實際數字。"},
         {group: "視覺化圖的標記", term: "off the grid", tip: "這組座標在格子外面（例如往牆外試探的 nr = -1），所以圖上沒有標記。"},
         {group: "視覺化圖的標記", term: "clipped", tip: "資料太大，只畫出前面一部分。長陣列只讀取前 50 項，標題會寫「0–49 of 80 items」。"},
@@ -28,7 +30,7 @@
         {group: "Variables 區", term: "Changed by the last line", tip: "橘色：上一行執行後，值改變了的變數。"},
         {group: "Variables 區", term: "First appearance", tip: "整列淺藍色：這個變數第一次出現（剛被宣告）。"},
         {group: "Variables 區", term: "now -> next", tip: "例如 7 -> mid+1 = 7+1 = 8：左邊是現在的值，右邊是黃色那一行執行完之後的值，中間是它怎麼算出來的。"},
-        {group: "Variables 區", term: "same list as", tip: "↪ same list as a：這個變數和 a 是同一個物件（例如 b = a），改其中一個，另一個也會跟著變。"},
+        {group: "Variables 區", term: "same list as", tip: "↪ 後面是這個變數指向的物件：same list as a 代表和 a 是同一個 list（例如 b = a）；matrix[1] 代表它就是 matrix 的第 1 列（例如 row = matrix[1]）。改其中一個，另一個也會跟著變。滑鼠停在上面時，會把那個位置在圖上和 Variables 裡框起來。"},
         {group: "Variables 區", term: "integer", tip: "斜體的 integer / floating / text：找不到這個變數的宣告，所以只顯示值的種類，不猜它是 int 還是 long long。"},
         {group: "Variables 區", term: "Function", tip: "Variables 標題旁邊的名字：現在所在的函式。lambda 會顯示存放它的變數名稱（例如 dfs）。"},
         // Header and timeline

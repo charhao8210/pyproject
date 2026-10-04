@@ -257,7 +257,10 @@ def test_directed_graph_keeps_parallel_edges_and_undirected_edges_are_drawn_once
 
     graph = run_debugger(UNDIRECTED, language="cpp")["steps"][-1]["visualization"]
     assert graph["directed"] is False
-    assert sorted((edge["source"], edge["target"]) for edge in graph["edges"]) == [("1", "2"), ("1", "4"), ("2", "3")]
+    # Every stored edge is kept (the user can switch to directed); drawn undirected, each pair once.
+    assert len(graph["edges"]) == 6
+    drawn = [graph["edges"][position] for position in graph["undirected"]]
+    assert sorted((edge["source"], edge["target"]) for edge in drawn) == [("1", "2"), ("1", "4"), ("2", "3")]
 
 
 def test_a_second_name_for_a_list_is_a_reference_to_the_same_object() -> None:

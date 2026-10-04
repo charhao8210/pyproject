@@ -9,6 +9,8 @@ class DebugRequest(BaseModel):
     code: str = Field(max_length=50_000)
     stdin: str = Field(default="", max_length=100_000)
     language: Literal["python", "cpp"] = "python"
+    # View ids beyond the ones computed up front (`algorithm.views` entries marked `pending`).
+    views: list[str] = Field(default_factory=list, max_length=64)
 
 
 class DebugResponse(BaseModel):

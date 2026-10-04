@@ -30,6 +30,11 @@ class AlgorithmProfile:
     # (container, index variable) for every `a[i]` in the source: an index marker is drawn
     # only on a container that variable indexes (`l[i]` does not put `i` on `v`).
     subscripts: frozenset[tuple[str, str]] = frozenset()
+    # Which element of a weighted adjacency pair is the vertex (0 or 1), read from the code
+    # (`w = e.first; v = e.second`); None when the code does not say.
+    pair_vertex: int | None = None
+    # How each distance table marks "not reached", decided from the whole trace (`_reached_rules`).
+    reached_rules: tuple[tuple[str, str], ...] = ()
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -113,6 +118,7 @@ def analyze_execution(
     steps: list[dict[str, Any]],
     *,
     language: str = "python",
+    extra_views: Iterable[str] = (),
 ) -> dict[str, Any]:
     decoded: dict[int, Any] = {}
     scopes = [_decode_scope(step, decoded) for step in steps]
@@ -125,7 +131,7 @@ def analyze_execution(
         features.visit(tree)
         profile = _classify(features, shapes)
     profile = _with_focus(profile, source, language)
-    profile = replace(profile, subscripts=_subscripts(source))
+    profile = replace(profile, subscripts=_subscripts(source), pair_vertex=_pair_vertex_position(source))
 
     parent_name, first_vertex = _union_find_parent(source)
     if parent_name is not None:
@@ -138,7 +144,7 @@ def analyze_execution(
         )
 
     # Every view the user can pick is computed up front, so switching views needs no re-run.
-    catalog = _view_catalog(scopes, steps)
+    catalog = _view_catalog(scopes, steps, set(extra_views))
     if parent_name is not None and any(isinstance(scope.get(parent_name), list) for scope in scopes):
         catalog.insert(
             0,
@@ -176,10 +182,12 @@ def analyze_execution(
     loops = loop_jumps(steps, loop_ranges(source, language))
     inputs = input_values(source, language, steps)
     extents = _grid_extents(scopes)
+    profile = replace(profile, reached_rules=_reached_rules(scopes))
     last_ready: dict[str, dict[str, Any]] = {}
     previous: dict[str, dict[str, Any]] = {}
     # The "infinity" placeholder values seen in each array so far (`_mark_infinite`).
     sentinels: dict[str, set[Any]] = {}
+    spells_infinity = bool(_INFINITY_SPELLINGS.search(source))
     for index, (step, scope) in enumerate(zip(steps, scopes)):
         step["usage"] = usage[index]
         step["loop"] = loops[index]
@@ -195,12 +203,14 @@ def analyze_execution(
         previous_scope = scopes[index - 1] if index else None
         _mark_writes(visualization, previous.get(AUTO_VIEW), scope, previous_scope)
         _mark_line_reads(visualization, step, scope, source_lines, language)
-        _mark_infinite(visualization, sentinels)
+        _mark_infinite(visualization, sentinels, spells_infinity)
         previous[AUTO_VIEW] = visualization
         step["visualization"] = visualization
 
         views: dict[str, dict[str, Any]] = {}
         for view in catalog:
+            if view.get("pending"):
+                continue
             recursion_state = recursion_steps[index] if recursion_steps else None
             if view["renderer"] == "segment_tree":
                 line = step.get("line")
@@ -214,7 +224,7 @@ def analyze_execution(
             _drop_input_readouts(model, input_names)
             _mark_writes(model, previous.get(view["id"]), scope, previous_scope)
             _mark_line_reads(model, step, scope, source_lines, language)
-            _mark_infinite(model, sentinels)
+            _mark_infinite(model, sentinels, spells_infinity)
             previous[view["id"]] = model
             views[view["id"]] = model
         step["views"] = views
@@ -232,6 +242,7 @@ def analyze_execution(
                 view["id"]
                 for view in catalog
                 if view["renderer"] != "execution"
+                and not view.get("pending")
                 and any(step["views"][view["id"]].get("ready") for step in steps)
             ),
             None,
@@ -340,11 +351,14 @@ def _after_line(mine: dict[str, Any], after: dict[str, Any], after_index: int) -
 
 
 def _orient_graphs(steps: list[dict[str, Any]]) -> None:
-    """Decide once per trace whether each graph is directed, and draw undirected edges once.
+    """Guess once per trace whether each graph is directed; keep every stored edge.
 
     An undirected adjacency list stores every edge both ways (`adj[a].push_back(b)` and
     `adj[b].push_back(a)`); a directed one (`adj[a].push_back({b, c})` only) does not. The
     fullest state of the graph decides, since an edge is half-stored between its two pushes.
+    A directed graph can happen to be symmetric (1→2 and 2→1 both given), so this is only a
+    guess: `edges` keeps every stored edge and `undirected` lists the ones to draw (each pair
+    once) when the graph is read as undirected; the view lets the user switch.
     Parallel edges (`1 → 3` twice) are kept: the view bends them apart.
     """
     models = []
@@ -371,8 +385,7 @@ def _orient_graphs(steps: list[dict[str, Any]]) -> None:
         if name not in directed:
             continue
         model["directed"] = directed[name]
-        if not directed[name]:
-            model["edges"] = _undirected_edges(model.get("edges") or [])
+        model["undirected"] = _undirected_edges(model.get("edges") or [])
 
 
 def _edge_key(edge: dict[str, str], reverse: bool = False) -> tuple[str, str, Any]:
@@ -387,17 +400,18 @@ def _symmetric(edges: list[dict[str, str]]) -> bool:
     return all(counts.get((target, source, weight), 0) == count for (source, target, weight), count in counts.items())
 
 
-def _undirected_edges(edges: list[dict[str, str]]) -> list[dict[str, str]]:
-    """Each stored pair `a → b`, `b → a` once; two edges between the same vertices stay two."""
+def _undirected_edges(edges: list[dict[str, str]]) -> list[int]:
+    """Positions of the edges an undirected drawing keeps: each stored pair `a → b`, `b → a`
+    once; two edges between the same vertices stay two."""
     pending: dict[tuple[str, str, Any], int] = {}
     kept = []
-    for edge in edges:
+    for position, edge in enumerate(edges):
         reverse = _edge_key(edge, reverse=True)
         if pending.get(reverse):
             pending[reverse] -= 1
             continue
         pending[_edge_key(edge)] = pending.get(_edge_key(edge), 0) + 1
-        kept.append(edge)
+        kept.append(position)
     return kept
 
 
@@ -539,8 +553,18 @@ MAX_VIEW_VARIABLES = 6
 _VARIABLE_RENDERERS = ("grid", "array", "cells", "graph")
 
 
-def _view_catalog(scopes: list[dict[str, Any]], steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """List every (renderer, variable) pair whose data shape appears somewhere in the trace."""
+def _view_catalog(
+    scopes: list[dict[str, Any]],
+    steps: list[dict[str, Any]],
+    requested: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    """List every (renderer, variable) pair whose data shape appears somewhere in the trace.
+
+    All of them can be picked, but only the first `MAX_VIEW_VARIABLES` per renderer (and any
+    `requested` by id) are computed for every step; the rest are `pending`, and picking one
+    runs the program again asking for it (`DebugRequest.views`), so a seventh array is
+    reachable without every trace paying for every view.
+    """
     found: dict[str, list[str]] = {renderer: [] for renderer in _VARIABLE_RENDERERS}
 
     def add(renderer: str, name: str) -> None:
@@ -562,11 +586,14 @@ def _view_catalog(scopes: list[dict[str, Any]], steps: list[dict[str, Any]]) -> 
             if _is_adjacency(value, name):
                 add("graph", name)
 
-    catalog = [
-        {"id": f"{renderer}:{name}", "renderer": renderer, "variable": name}
-        for renderer in _VARIABLE_RENDERERS
-        for name in found[renderer][:MAX_VIEW_VARIABLES]
-    ]
+    catalog = []
+    for renderer in _VARIABLE_RENDERERS:
+        for position, name in enumerate(found[renderer]):
+            view_id = f"{renderer}:{name}"
+            view = {"id": view_id, "renderer": renderer, "variable": name}
+            if position >= MAX_VIEW_VARIABLES and view_id not in (requested or set()):
+                view["pending"] = True
+            catalog.append(view)
     if any(len(step.get("stack") or []) >= 2 for step in steps):
         catalog.append({"id": "recursion_tree", "renderer": "recursion_tree", "variable": None})
         catalog.append({"id": "call_tree", "renderer": "call_tree", "variable": None})
@@ -585,13 +612,13 @@ def _view_model(
 ) -> dict[str, Any]:
     renderer, name = view["renderer"], view["variable"]
     if renderer == "grid":
-        return _grid_visualization(scope, step, name, extents)
+        return _grid_visualization(scope, step, name, extents, dict(profile.reached_rules))
     if renderer == "array":
         return _array_visualization(scope, profile, name, extents)
     if renderer == "cells":
         return _cells_visualization(scope, profile, name, language, extents)
     if renderer == "graph":
-        return _graph_visualization(scope, name)
+        return _graph_visualization(scope, name, profile.pair_vertex)
     if renderer == "dsu":
         return _union_find_visualization(scope, name, view.get("first", 0))
     if renderer == "recursion_tree":
@@ -699,20 +726,28 @@ def _mark_writes(
     ]
 
 
-def _mark_infinite(model: dict[str, Any], sentinels: dict[str, set[Any]]) -> None:
+_INFINITY_SPELLINGS = re.compile(
+    r"\b(?:INF|inf|oo|INFINITY|LLINF|INT_MAX|LLONG_MAX|LONG_MAX|INT64_MAX)\b"
+    r"|0x3[fF]3[fF]3[fF]3[fF]|\b1e(?:9|18|15|17)\b|10\s*\*\*\s*(?:9|18)|float\(\s*['\"]inf['\"]\s*\)|math\.inf"
+)
+
+
+def _mark_infinite(model: dict[str, Any], sentinels: dict[str, set[Any]], spells_infinity: bool) -> None:
     """Entries holding an "infinity" placeholder (`INF = 1e9` in a dp or dist array).
 
-    A value counts once it filled two or more entries of that array at some step (`[INF] * n`),
-    and only if it is a usual INF constant, so a large input value is never taken for one.
+    Needs three pieces of evidence, so ordinary large numbers (`prices = [1e9, 1e9, 3]`) stay
+    numbers: the code spells an infinity (`INF`, `LLONG_MAX`, `1e18`, `0x3f3f3f3f`), the value is
+    a usual INF constant, and at some step it was every nonzero entry of the array, at least two
+    (`[INF] * n`, `dist(n + 1, LLONG_MAX)`, a fill loop still running). Once known it stays known.
     Bars draw these apart instead of letting 10^9 flatten every real value.
     """
     if model.get("renderer") != "array" or not model.get("ready"):
         return
     values = model.get("values") or []
     known = sentinels.setdefault(str(model.get("name")), set())
-    for value in set(values):
-        if value not in known and _is_infinity(value) and values.count(value) >= 2:
-            known.add(value)
+    nonzero = [value for value in values if value != 0]
+    if spells_infinity and len(nonzero) >= 2 and len(set(nonzero)) == 1 and _is_infinity(nonzero[0]):
+        known.add(nonzero[0])
     infinite = [index for index, value in enumerate(values) if value in known or value == float("inf")]
     if infinite:
         model["infinite"] = infinite
@@ -1107,6 +1142,10 @@ class _SetItems(list):
     unordered = True
 
 
+class _ObjectFields(dict):
+    """Decoded fields of an instance of a class the program defined."""
+
+
 class _PartialItems(list):
     """The first entries of a list too long to read whole; `total` is its real size, if known."""
 
@@ -1157,7 +1196,8 @@ def _decode_value(
             return _PartialItems(items, value.get("length"))
         return items
     if type_name == "dict":
-        decoded: dict[Any, Any] = {}
+        # A program's own object (`Node`): its fields, never a graph's adjacency dict.
+        decoded: dict[Any, Any] = _ObjectFields() if value.get("class_name") not in (None, "dict") else {}
         for entry in value.get("entries", [])[:MAX_VISUAL_ITEMS]:
             key = _decode_value(entry.get("key"), registry, seen)
             item = _decode_value(entry.get("value"), registry, seen)
@@ -1176,11 +1216,11 @@ def _visualization_for(
     extents: dict[str, tuple[int, int]] | None = None,
 ) -> dict[str, Any]:
     if profile.renderer == "grid":
-        return _grid_visualization(scope, step, None, extents)
+        return _grid_visualization(scope, step, None, extents, dict(profile.reached_rules))
     if profile.renderer == "array":
         return _array_visualization(scope, profile, None, extents)
     if profile.renderer == "graph":
-        return _graph_visualization(scope)
+        return _graph_visualization(scope, None, profile.pair_vertex)
     if profile.renderer == "call_tree":
         return _call_tree_visualization(step)
     return _execution_visualization(step)
@@ -1222,6 +1262,7 @@ def _grid_visualization(
     step: dict[str, Any],
     name: str | None = None,
     extents: dict[str, tuple[int, int]] | None = None,
+    reached_rules: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     if name is None:
         # A character map (the maze, the board) is the grid; tables beside it only mark it.
@@ -1287,7 +1328,7 @@ def _grid_visualization(
         return {"renderer": "grid", "ready": False}
     rows = [row[:column_count] for row in rows[:row_count]]
 
-    visited_name, visited = _find_visited(scope, row_count, column_count)
+    visited_name, visited = _find_visited(scope, row_count, column_count, reached_rules)
     # A wall is never visited, whatever value a table keeps for it.
     for row, column in walls:
         if row < row_count and column < column_count:
@@ -1465,6 +1506,10 @@ def _array_visualization(
         focus = {*profile.focus, *(("dp",) if profile.kind == "dynamic_programming" else ())}
         candidates = [(array_name, value) for array_name, value in candidates if array_name in focus]
     for array_name, value in candidates:
+        if isinstance(value, list) and not value and not isinstance(value, _SetItems):
+            # In scope and empty (`q` after its last pop): drawn empty, never as the last
+            # non-empty state, which is only for a variable that left scope.
+            return _empty_sequence("array", array_name)
         projection = _numeric_array_projection(value)
         if projection is None and array_name in profile.focus and _is_bool_list(value):
             # `can[s] = True`: a reachability table, drawn as 0/1 bars.
@@ -1490,6 +1535,10 @@ def _array_visualization(
     return {"renderer": "array", "ready": False}
 
 
+def _empty_sequence(renderer: str, name: str) -> dict[str, Any]:
+    return {"renderer": renderer, "ready": True, "name": name, "values": [], "truncated": False, "markers": [], "uses": [name]}
+
+
 def _mark_partial(visualization: dict[str, Any], value: Any) -> None:
     """Record the real size of a list only partly read (`a` has 80 entries, 50 were read)."""
     if isinstance(value, _PartialItems) and value.total is not None:
@@ -1508,6 +1557,8 @@ def _cells_visualization(
     if isinstance(value, str) and value:
         items = list(value[:MAX_VISUAL_ITEMS])
         length = len(value)
+    elif isinstance(value, list) and not value:
+        return _empty_sequence("cells", name)
     elif isinstance(value, list):
         partial = isinstance(value, _PartialItems)
         length = len(value) if partial else _logical_length(scope, value, (extents or {}).get(name, (0, 0))[0])
@@ -1667,20 +1718,26 @@ def _is_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
-def _graph_visualization(scope: dict[str, Any], graph_name: str | None = None) -> dict[str, Any]:
+def _graph_visualization(
+    scope: dict[str, Any],
+    graph_name: str | None = None,
+    vertex_position: int | None = None,
+) -> dict[str, Any]:
     for name, value in _named_values(scope, graph_name, ("graph", "g", "adj", "adjacency")):
         if not _is_adjacency(value, name) or (graph_name is None and name.lower() in NOT_A_GRAPH_NAMES):
             continue
-        adjacency = _adjacency_rows(value) or []
+        chosen: list[int] = []
+        adjacency = _adjacency_rows(value, vertex_position, chosen) or []
         if isinstance(value, dict):
             node_values = {source for source, _ in adjacency}
         else:
             node_values = {source for source, targets in adjacency if targets}
             # Fixed-size C++ adjacency arrays have many unused rows; only keep
-            # isolated vertices inside the logical 0..n-1 or 1..n range.
+            # isolated vertices inside the logical 0..n-1 or 1..n range. A list of exactly n
+            # rows is 0-indexed (`adj = [[1], [0], [], []]` has vertices 0..3).
             count = scope.get("n")
-            if _is_index(count) and 0 < count < len(value):
-                first = 1 if not value[0] else 0
+            if _is_index(count) and 0 < count <= len(value):
+                first = 0 if count == len(value) else (1 if not value[0] else 0)
                 node_values.update(range(first, first + count))
         edges: list[dict[str, str]] = []
         for source, targets in adjacency:
@@ -1737,14 +1794,21 @@ def _graph_visualization(scope: dict[str, Any], graph_name: str | None = None) -
             "name": name,
             "uses": _unique_names([
                 name,
-                visited_name if isinstance(visited_value, list) else None,
+                # A visited array covering vertices the graph does not draw stays in Variables.
+                visited_name if isinstance(visited_value, list) and _covers(visited_value, node_values) else None,
                 current_name,
                 checking["to_name"] if checking else None,
+                checking.get("weight_name") if checking else None,
                 frontier_name,
                 route_name,
             ]),
-            # The edge from the current vertex to the neighbour it is looking at.
-            "checking": {"source": checking["source"], "target": checking["target"]} if checking else None,
+            # The edge from the current vertex to the neighbour it is looking at (and its weight,
+            # which tells parallel edges apart).
+            "checking": (
+                {key: checking[key] for key in ("source", "target", "weight") if key in checking}
+                if checking
+                else None
+            ),
             "nodes": sorted(str(node) for node in node_values),
             "edges": edges[:100],
             "visited": visited,
@@ -1757,6 +1821,10 @@ def _graph_visualization(scope: dict[str, Any], graph_name: str | None = None) -
             "labels": {"name": label_name, "values": labels} if label_name else None,
             # The path a backtracking loop has built so far (`route`), in order.
             "route": route,
+            # Which pair element was taken for the vertex, said on screen since it is inferred.
+            "pair_order": (
+                ("(vertex, weight)" if chosen[0] == 0 else "(weight, vertex)") if chosen else None
+            ),
             # A tree is laid out from its root down instead of around a circle.
             "layout": "tree" if parents else None,
             "parents": parents,
@@ -1788,6 +1856,12 @@ def _graph_route(
         extends = current is not None and current != last and ((last, current) in joined or (current, last) in joined)
         return key, {"name": key, "items": items, **({"next": current} if extends else {})}
     return None, None
+
+
+def _covers(flags: list[Any], node_values: set[Any]) -> bool:
+    """Every set entry of a per-vertex array belongs to a drawn vertex."""
+    drawn = {str(node) for node in node_values}
+    return all(str(index) in drawn for index, flag in enumerate(flags) if flag not in (0, False, None, -1))
 
 
 REACHED_VERTEX_NAMES = ("team", "color", "colour", "side", "dist", "dis", "depth", "level", "comp")
@@ -1859,8 +1933,25 @@ def _checking_edge(
             if target_name == source_name or not _is_index(target):
                 continue
             if (str(source), str(target)) in joined or (str(target), str(source)) in joined:
-                return {"from_name": source_name, "to_name": target_name, "source": str(source), "target": str(target)}
+                found = {"from_name": source_name, "to_name": target_name, "source": str(source), "target": str(target)}
+                # Two edges can join the same vertices (`1 → 3` with weights 2 and 4): the
+                # weight variable in scope says which one is being looked at.
+                weights = {
+                    edge.get("weight")
+                    for edge in edges
+                    if {edge["source"], edge["target"]} == {str(source), str(target)} and edge.get("weight") is not None
+                }
+                for weight_name in WEIGHT_VARIABLE_NAMES:
+                    weight = scope.get(weight_name)
+                    if _is_number(weight) and _display_value(weight, "cpp") in weights:
+                        found["weight"] = _display_value(weight, "cpp")
+                        found["weight_name"] = weight_name
+                        break
+                return found
     return None
+
+
+WEIGHT_VARIABLE_NAMES = ("w", "wt", "weight", "c", "cost", "len", "length")
 
 
 GRAPH_FRONTIER_NAMES = ("q", "queue", "que", "frontier", "st", "stack", "pq")
@@ -2008,6 +2099,7 @@ def _find_visited(
     scope: dict[str, Any],
     rows: int,
     columns: int,
+    reached_rules: dict[str, str] | None = None,
 ) -> tuple[str | None, list[list[bool]]]:
     for name in ("vis", "visited", "seen"):
         value = scope.get(name)
@@ -2021,7 +2113,7 @@ def _find_visited(
     for name in REACHED_GRID_NAMES:
         key, value = _scope_lookup(scope, name)
         rows_of = _normalize_grid(_used_rows(value)) if isinstance(value, list) else []
-        reached = _reached_test([cell for row in rows_of for cell in row])
+        reached = _reached_test([cell for row in rows_of for cell in row], (reached_rules or {}).get(key))
         if reached is None:
             continue
         marks = [
@@ -2040,19 +2132,47 @@ INF_CONSTANTS = frozenset({
 })
 
 
-def _reached_test(cells: list[Any]) -> Callable[[Any], bool] | None:
+def _reached_rules(scopes: list[dict[str, Any]]) -> tuple[tuple[str, str], ...]:
+    """For each distance table, how it marks "not reached", from every step of the trace.
+
+    Once the last `-1` is gone (every cell reached), the table alone would look like a
+    "0 means unreached" table and the start (distance 0) would lose its mark; the rule found
+    while the search ran holds to the end.
+    """
+    rules: dict[str, str] = {}
+    measured: set[int] = set()
+    for scope in scopes:
+        for name in REACHED_GRID_NAMES:
+            key, value = _scope_lookup(scope, name)
+            if not isinstance(value, list) or id(value) in measured:
+                continue
+            measured.add(id(value))
+            cells = [cell for row in value if isinstance(row, list) for cell in row if _is_number(cell)]
+            if any(cell < 0 for cell in cells):
+                rules[key] = "negative"
+            elif rules.get(key) != "negative" and any(_is_infinity(cell) for cell in cells):
+                rules[key] = "infinity"
+    return tuple(sorted(rules.items()))
+
+
+def _reached_test(cells: list[Any], rule: str | None = None) -> Callable[[Any], bool] | None:
     """How to tell a reached cell in a distance table, from the value it starts with.
 
     `-1` (or any negative) or an `INF` constant marks "not reached", so 0 (the start)
     counts as reached. A table with neither (0 means unreached) marks only nonzero cells.
-    Anything else (not all numbers) cannot be read reliably and marks nothing.
+    `rule` is that choice made over the whole trace (`_reached_rules`). Anything else (not
+    all numbers) cannot be read reliably and marks nothing.
     """
     numbers = [cell for cell in cells if _is_number(cell)]
     if not numbers or len(numbers) != len(cells):
         return None
-    if any(number < 0 for number in numbers):
+    if rule in {"negative", "infinity"} and not any(numbers):
+        # Still all zero: the table is not filled with its "not reached" value yet (before
+        # `memset(dist, -1, ...)`), so nothing has been reached.
+        return None
+    if rule == "negative" or (rule is None and any(number < 0 for number in numbers)):
         return lambda cell: _is_number(cell) and cell >= 0
-    if any(_is_infinity(number) for number in numbers):
+    if rule == "infinity" or (rule is None and any(_is_infinity(number) for number in numbers)):
         return lambda cell: _is_number(cell) and not _is_infinity(cell)
     return lambda cell: _is_number(cell) and cell != 0
 
@@ -2256,12 +2376,63 @@ def _is_flag_array(value: list[Any], numeric_nodes: list[int]) -> bool:
     )
 
 
-def _adjacency_rows(value: Any) -> list[tuple[Any, list[tuple[Any, Any]]]] | None:
+WEIGHT_NAMES = frozenset({"w", "wt", "weight", "c", "cost", "len", "length", "d", "dis", "dist", "l", "time", "t"})
+VERTEX_NAMES = frozenset({"v", "u", "to", "nxt", "next", "b", "y", "node", "child", "nb", "neighbor", "neighbour", "x"})
+_PAIR_FIELD = re.compile(r"\b([A-Za-z_]\w*)\s*=\s*[\w\]\[]+\.(first|second)\b")
+_PAIR_BINDING = re.compile(
+    r"\[\s*([A-Za-z_]\w*)\s*,\s*([A-Za-z_]\w*)\s*\]\s*:\s*[A-Za-z_]\w*\s*\["
+    r"|\bfor\s+\(?\s*([A-Za-z_]\w*)\s*,\s*([A-Za-z_]\w*)\s*\)?\s+in\s+[A-Za-z_]\w*\s*\["
+)
+_PAIR_PUSH = re.compile(r"\.(?:push_back|emplace_back|append)\s*\(\s*(?:\{|make_pair\s*\(|\()?\s*([A-Za-z_]\w*)\s*,\s*([A-Za-z_]\w*)")
+
+
+def _pair_vertex_position(source: str) -> int | None:
+    """Which element of `(a, b)` adjacency pairs is the vertex, from how the code names them:
+    `w = edge.first; v = edge.second`, `for (auto [v, w] : adj[u])`, `adj[a].push_back({b, c})`.
+    Both elements can be valid vertex numbers (`(1, 2)`), so the data alone cannot tell."""
+    code = source
+    for short, full in (("f", "first"), ("s", "second")):
+        if re.search(rf"#\s*define\s+{short}\s+{full}\b", code):
+            code = re.sub(rf"\.{short}\b", f".{full}", code)
+    votes = [0, 0]
+
+    def vote(first: str, second: str) -> None:
+        for position, name in ((0, first), (1, second)):
+            if name in VERTEX_NAMES:
+                votes[position] += 1
+            elif name in WEIGHT_NAMES:
+                votes[1 - position] += 1
+
+    for match in _PAIR_FIELD.finditer(code):
+        name, field = match.groups()
+        position = 0 if field == "first" else 1
+        if name in VERTEX_NAMES:
+            votes[position] += 1
+        elif name in WEIGHT_NAMES:
+            votes[1 - position] += 1
+    for match in _PAIR_BINDING.finditer(code):
+        first, second = (match.group(1), match.group(2)) if match.group(1) else (match.group(3), match.group(4))
+        vote(first, second)
+    for match in _PAIR_PUSH.finditer(code):
+        vote(*match.groups())
+    if votes[0] == votes[1]:
+        return None
+    return 0 if votes[0] > votes[1] else 1
+
+
+def _adjacency_rows(
+    value: Any,
+    vertex_position: int | None = None,
+    chosen: list[int] | None = None,
+) -> list[tuple[Any, list[tuple[Any, Any]]]] | None:
     """`(source, [(target, weight or None), ...])` per row of an adjacency list or dict.
 
     Weighted C++ lists hold pairs (`vector<pair<int,int>> adj[N]`); the vertex is the element
-    that is always a valid row index, the first one when both are.
+    the code treats as one (`vertex_position`, `_pair_vertex_position`), else the element that
+    is always a valid row index, the first one when both are.
     """
+    if isinstance(value, _ObjectFields):
+        return None
     if isinstance(value, dict):
         rows = list(value.items())
     elif isinstance(value, list) and len(value) >= 2:
@@ -2277,12 +2448,15 @@ def _adjacency_rows(value: Any) -> list[tuple[Any, list[tuple[Any, Any]]]] | Non
     )
     if pairs:
         limit = len(rows) if isinstance(value, list) else None
-        for position in (0, 1):
+        order = (vertex_position, 1 - vertex_position) if vertex_position in (0, 1) else (0, 1)
+        for position in order:
             if all(
                 _is_index(target[position]) and target[position] >= 0
                 and (limit is None or target[position] < limit)
                 for target in flattened
             ):
+                if chosen is not None:
+                    chosen.append(position)
                 return [
                     (source, [(target[position], target[1 - position]) for target in targets])
                     for source, targets in rows
