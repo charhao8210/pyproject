@@ -21,3 +21,7 @@ class DebugResponse(BaseModel):
     status: Literal["completed", "exception", "step_limit", "timeout"]
     error: dict[str, str] | None = None
     algorithm: dict[str, Any]
+    # C++ loop lines that stopped being traced after `loop_stop_limit` stops, with the step
+    # of their last stop (`cpp_runner.MAX_LOOP_LINE_STOPS`).
+    capped: list[dict[str, int]] = Field(default_factory=list)
+    loop_stop_limit: int | None = None

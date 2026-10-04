@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import ast
 import re
+from functools import lru_cache
 from typing import Any
 
 
@@ -37,6 +38,7 @@ def variable_usage(
     lines = source.split("\n")
     noise = _CPP_NOISE if language == "cpp" else _PYTHON_NOISE
     names_by_line: dict[int, set[str]] = {}
+    uninitialised = _uninitialised_declarations(source, language)
     # The last scope seen for each live frame, keyed by stack depth and function name.
     frame_scopes: dict[tuple[int, str], dict[str, Any]] = {}
     # ...and the index of the step it came from, which receives the effect of its line.
@@ -76,7 +78,9 @@ def variable_usage(
             for name in changed:
                 new = serialized.get(name)
                 single = isinstance(new, dict) and new.get("type") in SINGLE_VALUE_TYPES
-                if name not in before and not _creates(language, names_by_line.get(effect_line, set()), name):
+                if name not in before and not _creates(
+                    language, names_by_line.get(effect_line, set()), name, uninitialised.get(effect_line, frozenset())
+                ):
                     # Only came into view (`int n;` has no stop of its own): nothing to preview.
                     continue
                 if name not in before:
@@ -128,7 +132,10 @@ def variable_usage(
                     continue
                 seen.add((owner, name))
                 created_there = earlier is not None and _creates(
-                    language, names_by_line.get(steps[earlier].get("line"), set()), name
+                    language,
+                    names_by_line.get(steps[earlier].get("line"), set()),
+                    name,
+                    uninitialised.get(steps[earlier].get("line"), frozenset()),
                 )
                 target = usage[earlier] if created_there else current
                 target["new"].append(name)
@@ -224,6 +231,8 @@ def _entry(match: re.Match[str], scope: dict[str, Any], language: str) -> str:
     return _display(value, language) if _is_single(value) else match.group(0)
 
 
+# The same index texts (`3 - 1`) come back at every step of a loop.
+@lru_cache(maxsize=8192)
 def _integer(text: str) -> int | None:
     """Evaluate a small integer expression such as `3-1` (a substituted `i-1`)."""
     if not re.fullmatch(r"[\d\s+\-*/%()]+", text) or "**" in text:
@@ -257,14 +266,42 @@ SINGLE_VALUE_TYPES = frozenset({"int", "float", "bool", "none", "str", "referenc
 _MISSING = object()
 
 
-def _creates(language: str, names_on_line: set[str], name: str) -> bool:
+def _creates(language: str, names_on_line: set[str], name: str, uninitialised: frozenset[str] = frozenset()) -> bool:
     """Whether a line can be what creates `name`.
 
     A C++ variable comes into view at the first stop after its declaration, and a plain
     `int n;` has no stop of its own: the line before it (`cout.tie(0);`) neither creates `n`
-    nor gives it its uninitialised value, so that line must not preview it.
+    nor gives it its uninitialised value, so that line must not preview it. Neither does
+    `int n, T, K, ans = 0;` for n: it only holds garbage until `cin >> n` sets it, so n is
+    listed on that line, like a plain `int n;` (`_uninitialised_declarations`).
     """
-    return language != "cpp" or name in names_on_line
+    return language != "cpp" or (name in names_on_line and name not in uninitialised)
+
+
+def _uninitialised_declarations(source: str, language: str) -> dict[int, frozenset[str]]:
+    """Single C++ values each function line declares without a value (`int n, T, K, ans = 0;`
+    → n, T, K)."""
+    if language != "cpp":
+        return {}
+    from .cpp_source import FUNDAMENTAL_TYPES, _normalize_type, analyze_source, expand_aliases, strip_code
+
+    model = analyze_source(source)
+    lines = strip_code(source).split("\n")
+    result: dict[int, frozenset[str]] = {}
+    for line, names in model.line_declarations.items():
+        if model.block_for_line(line) is None or not 1 <= line <= len(lines):
+            continue
+        text = lines[line - 1]
+        bare = frozenset(
+            name
+            for name in names
+            if _normalize_type(expand_aliases(model.declared_type(name, line) or "", model.aliases)) in FUNDAMENTAL_TYPES
+            and re.search(rf"(?<![\w.]){re.escape(name)}\s*[,;]", text)
+            and not re.search(rf"(?<![\w.]){re.escape(name)}\s*[=({{]", text)
+        )
+        if bare:
+            result[line] = bare
+    return result
 
 
 def front_removed(old: list[Any], new: list[Any]) -> int:

@@ -15,7 +15,7 @@ from .validator import validate_source
 DEFAULT_TIMEOUT_SECONDS = 3.0
 # GDB stops at every line (10-15 ms each), so a C++ trace needs far longer than the
 # program itself; 3 s would already cut off small CSES sample inputs.
-CPP_TIMEOUT_SECONDS = 10.0
+CPP_TIMEOUT_SECONDS = 30.0
 
 
 class ExecutionTimeoutError(TimeoutError):

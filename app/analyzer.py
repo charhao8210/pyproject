@@ -10,7 +10,7 @@ from .loops import loop_jumps, loop_ranges
 from .recursion import build_recursion_tree
 from .serializer import MAX_ITEMS
 from .inputs import input_values
-from .usage import front_removed, variable_usage
+from .usage import _integer, _substitute, front_removed, variable_usage
 
 
 MAX_VISUAL_ROWS = 30
@@ -121,6 +121,9 @@ def analyze_execution(
     extra_views: Iterable[str] = (),
 ) -> dict[str, Any]:
     decoded: dict[int, Any] = {}
+    # Memos keyed by object ids, valid only while this trace's decoded values are alive.
+    _CORNERS.clear()
+    _CUBE_CELLS.clear()
     scopes = [_decode_scope(step, decoded) for step in steps]
     shapes = _runtime_shapes(scopes, _edge_id_lists(source))
     if language == "cpp":
@@ -181,7 +184,7 @@ def analyze_execution(
     usage = variable_usage(source, language, steps, scopes)
     loops = loop_jumps(steps, loop_ranges(source, language))
     inputs = input_values(source, language, steps)
-    extents = _grid_extents(scopes)
+    extents = {**_grid_extents(scopes), **_cube_extents(scopes, steps, source_lines, language)}
     profile = replace(profile, reached_rules=_reached_rules(scopes))
     last_ready: dict[str, dict[str, Any]] = {}
     previous: dict[str, dict[str, Any]] = {}
@@ -193,7 +196,14 @@ def analyze_execution(
         step["loop"] = loops[index]
         step["inputs"] = inputs[index]
         input_names = {entry["name"] for entry in inputs[index]}
-        automatic = _visualization_for(profile, scope, step, extents)
+        line_text = _line_text(step, source_lines, language)
+        automatic = _visualization_for(profile, scope, step, extents, line_text, language)
+        # Auto's 3D table is the same model as that table's own view: built once per step.
+        shared = (
+            {f"layers:{automatic['name']}": dict(automatic)}
+            if automatic.get("renderer") == "layers" and automatic.get("ready")
+            else {}
+        )
         if profile.renderer == "call_tree" and recursion_steps and recursion_tree and recursion_tree["nodes"]:
             # A function calling itself reads best as its recursion tree: every call with its
             # arguments (`fib(4)`, `fib(3)`) and returned value, not a chain of bare `fib()`.
@@ -218,8 +228,10 @@ def analyze_execution(
                 model = segment_tree.model(
                     segment_spec, segment_layout, scope, step, segment_paths[index], line_text, language
                 )
+            elif view["id"] in shared:
+                model = dict(shared[view["id"]])
             else:
-                model = _view_model(view, profile, scope, step, recursion_state, language, extents)
+                model = _view_model(view, profile, scope, step, recursion_state, language, extents, line_text)
             model = _carry(view["id"], model, last_ready, step)
             _drop_input_readouts(model, input_names)
             _mark_writes(model, previous.get(view["id"]), scope, previous_scope)
@@ -344,6 +356,10 @@ def _after_line(mine: dict[str, Any], after: dict[str, Any], after_index: int) -
     if mine.get("renderer") == "graph":
         # What the line reads (`dis[n]`) is read before it runs, so it is this step's.
         shown["reading"] = mine.get("reading", [])
+    if mine.get("renderer") == "layers":
+        # The cells this line writes and reads, found from its subscripts before it runs.
+        for key in ("current", "reading", "details"):
+            shown[key] = mine.get(key, [])
     uses = [*after.get("uses", []), *mine.get("uses", [])]
     if uses:
         shown["uses"] = list(dict.fromkeys(uses))
@@ -550,7 +566,7 @@ VISITED_LIKE_NAMES = frozenset(
 REACHED_GRID_NAMES = ("mov", "move", "moves", "back", "from", "pre", "prev", "par", "parent", "dist", "dis", "d", "step", "steps")
 FRONTIER_NAMES = frozenset({"q", "queue", "que", "pq", "st", "stack", "frontier", "dq"})
 MAX_VIEW_VARIABLES = 6
-_VARIABLE_RENDERERS = ("grid", "array", "cells", "graph")
+_VARIABLE_RENDERERS = ("layers", "grid", "array", "cells", "graph")
 
 
 def _view_catalog(
@@ -575,6 +591,8 @@ def _view_catalog(
         for name, value in scope.items():
             if name.startswith("__"):
                 continue
+            if isinstance(value, _Cube):
+                add("layers", name)
             if _is_grid(value):
                 add("grid", name)
             # Any list can be shown as a row of cells; rows of a grid show as compact lists.
@@ -609,8 +627,11 @@ def _view_model(
     recursion_state: dict[str, Any] | None,
     language: str,
     extents: dict[str, tuple[int, int]] | None = None,
+    line_text: str = "",
 ) -> dict[str, Any]:
     renderer, name = view["renderer"], view["variable"]
+    if renderer == "layers":
+        return _layers_visualization(scope, step, name, line_text, language, extents)
     if renderer == "grid":
         return _grid_visualization(scope, step, name, extents, dict(profile.reached_rules))
     if renderer == "array":
@@ -657,6 +678,10 @@ def _carry(
         carried.pop("readouts", None)
     elif renderer == "graph":
         carried["current"] = None
+    elif renderer == "layers":
+        carried["current"] = []
+        carried["reading"] = []
+        carried["details"] = []
     return carried
 
 
@@ -680,6 +705,24 @@ def _mark_writes(
         model["written"] = [
             position for position, value in enumerate(model.get("values") or [])
             if old is not None and position < len(old) and old[position] != value
+        ] if model.get("ready") and not model.get("carried") else []
+        return
+    if renderer == "layers":
+        # Cells of the same layer that differ from the previous step's (`dp[2][3][1]`).
+        old = (
+            {layer["index"]: layer["rows"] for layer in previous.get("layers", [])}
+            if previous and previous.get("ready") and previous.get("name") == model.get("name")
+            else {}
+        )
+        model["written"] = [
+            {"layer": layer["index"], "row": row_index, "column": column_index}
+            for layer in model.get("layers", [])
+            if layer["index"] in old and old[layer["index"]] is not layer["rows"]
+            for row_index, row in enumerate(layer["rows"])
+            for column_index, cell in enumerate(row)
+            if row_index < len(old[layer["index"]])
+            and column_index < len(old[layer["index"]][row_index])
+            and old[layer["index"]][row_index][column_index] != cell
         ] if model.get("ready") and not model.get("carried") else []
         return
     if renderer not in {"grid", "array", "cells"}:
@@ -824,6 +867,17 @@ def _classify_cpp(source: str, shapes: set[str]) -> AlgorithmProfile:
             "grid",
             0.93,
             ("2D indexed data", "visited state", "directional frontier"),
+        )
+
+    # A 3D array (`dp[i][j][k]`) is drawn two layers at a time, the one a recurrence reads
+    # (`dp[i-1]`) beside the one it writes (`dp[i]`).
+    if "cube" in shapes:
+        return AlgorithmProfile(
+            "dynamic_programming",
+            "Dynamic programming · 3D table",
+            "layers",
+            0.88,
+            ("3D dp state", "nested iteration", "indexed state updates"),
         )
 
     if "dp" in identifiers and ("matrix" in shapes or re.search(r"\bdp\s*\[", compact)):
@@ -1079,6 +1133,8 @@ def _runtime_shapes(scopes: list[dict[str, Any]], edge_id_lists: frozenset[str] 
     shapes: set[str] = set()
     for scope in scopes:
         for name, value in scope.items():
+            if isinstance(value, _Cube):
+                shapes.add("cube")
             # A queue or stack of (row, col) pairs is a frontier, not a table.
             if _is_grid(value) and name.lower() not in FRONTIER_NAMES:
                 shapes.add("matrix")
@@ -1154,6 +1210,40 @@ class _PartialItems(list):
         self.total = total if isinstance(total, int) and total > len(self) else None
 
 
+class _Cube:
+    """The layers of a 3D array read at a stop (`dp[i-1]` and `dp[i]`): {layer: rows}.
+
+    Not a list, so no list view (bars, cells, grid, graph) ever takes it for its data.
+    """
+
+    def __init__(self, length: Any, rows: Any, columns: Any, layers: dict[int, list[Any]]) -> None:
+        self.length = length if isinstance(length, int) else 0
+        self.rows = rows if isinstance(rows, int) else 0
+        self.columns = columns if isinstance(columns, int) else 0
+        self.layers = layers
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, _Cube) and self.layers == other.layers
+
+    __hash__ = None  # type: ignore[assignment]
+
+
+def _decode_layer(table: Any, registry: dict[int, dict[str, Any]], seen: set[int]) -> list[list[Any]]:
+    """A layer's rows of single values, without the general decoder's work per entry: a
+    3D table brings hundreds of entries at most stops."""
+    if not isinstance(table, dict):
+        return []
+    rows = []
+    for row in table.get("items", []):
+        cells = row.get("items", []) if isinstance(row, dict) else []
+        rows.append([
+            cell.get("value") if isinstance(cell, dict) and cell.get("type") in {"int", "float", "bool"}
+            else _decode_value(cell, registry, seen)
+            for cell in cells
+        ])
+    return rows
+
+
 def _decode_value(
     value: Any,
     registry: dict[int, dict[str, Any]],
@@ -1162,6 +1252,17 @@ def _decode_value(
     if not isinstance(value, dict):
         return None
     type_name = value.get("type")
+    if type_name == "cube":
+        return _Cube(
+            value.get("length"),
+            value.get("rows"),
+            value.get("columns"),
+            {
+                layer["index"]: _decode_layer(layer.get("value"), registry, seen)
+                for layer in value.get("layers", [])
+                if isinstance(layer, dict) and isinstance(layer.get("index"), int)
+            },
+        )
     if type_name == "reference":
         target = registry.get(value.get("object_id"))
         return _decode_value(target, registry, seen) if target else None
@@ -1214,7 +1315,11 @@ def _visualization_for(
     scope: dict[str, Any],
     step: dict[str, Any],
     extents: dict[str, tuple[int, int]] | None = None,
+    line_text: str = "",
+    language: str = "cpp",
 ) -> dict[str, Any]:
+    if profile.renderer == "layers":
+        return _layers_visualization(scope, step, None, line_text, language, extents)
     if profile.renderer == "grid":
         return _grid_visualization(scope, step, None, extents, dict(profile.reached_rules))
     if profile.renderer == "array":
@@ -1398,6 +1503,190 @@ def _grid_extents(scopes: list[dict[str, Any]]) -> dict[str, tuple[int, int]]:
             previous = extents.get(name, (0, 0))
             extents[name] = (max(previous[0], height), max(previous[1], width))
     return extents
+
+
+def _line_text(step: dict[str, Any], source_lines: list[str], language: str) -> str:
+    line = step.get("line")
+    text = source_lines[line - 1] if isinstance(line, int) and 1 <= line <= len(source_lines) else ""
+    return re.sub(r"//.*$", "", text) if language == "cpp" else text.split("#", 1)[0]
+
+
+_CUBE_WRITE_AFTER = re.compile(r"\s*(?:(?:[-+*/%&|^]|<<|>>)?=(?!=)|\+\+|--)")
+
+
+def _cube_accesses(text: str, name: str) -> list[tuple[bool, list[str]]]:
+    """Every `name[a][b][c]` on a line: (whether the line assigns it, its three indexes)."""
+    found: list[tuple[bool, list[str]]] = []
+    for match in re.finditer(rf"(?<![\w.]){re.escape(name)}\s*\[", text):
+        position = match.end() - 1
+        indexes: list[str] = []
+        while len(indexes) < 3 and position < len(text) and text[position] == "[":
+            depth = 0
+            end = position
+            while end < len(text):
+                depth += {"[": 1, "]": -1}.get(text[end], 0)
+                if depth == 0:
+                    break
+                end += 1
+            if end >= len(text):
+                break
+            indexes.append(text[position + 1 : end].strip())
+            position = end + 1
+            while position < len(text) and text[position] in " \t":
+                position += 1
+        if len(indexes) == 3:
+            write = bool(_CUBE_WRITE_AFTER.match(text[position:])) or bool(re.search(r"(\+\+|--)\s*$", text[: match.start()]))
+            found.append((write, indexes))
+    return found
+
+
+def _cube_cells(
+    text: str,
+    name: str,
+    scope: dict[str, Any],
+    language: str,
+) -> list[tuple[bool, list[str], tuple[int, int, int] | None]]:
+    """The accesses with their indexes worked out from this step's values (`dp[i-1][j][k]` →
+    (1, 3, 0)), or None for one the values cannot settle."""
+    names = _LINE_NAMES.get(text)
+    if names is None:
+        names = _LINE_NAMES[text] = tuple(sorted(set(re.findall(r"[A-Za-z_]\w*", text))))
+    # What the indexes depend on: the values of single names, and which object each list is.
+    key = (text, name, language, tuple(
+        (word, value if _is_single_value(value) else id(value)) for word in names if (value := scope.get(word)) is not None
+    ))
+    if key not in _CUBE_CELLS:
+        cells = []
+        for write, indexes in _cube_accesses(text, name):
+            numbers = [_integer(_substitute(index, scope, language)) for index in indexes]
+            cell = tuple(numbers) if all(isinstance(number, int) for number in numbers) else None
+            cells.append((write, indexes, cell))
+        _CUBE_CELLS[key] = cells
+    return _CUBE_CELLS[key]  # type: ignore[return-value]
+
+
+_LINE_NAMES: dict[str, tuple[str, ...]] = {}
+_CUBE_CELLS: dict[tuple[Any, ...], list[tuple[bool, list[str], tuple[int, int, int] | None]]] = {}
+
+
+def _cube_extents(
+    scopes: list[dict[str, Any]],
+    steps: list[dict[str, Any]],
+    source_lines: list[str],
+    language: str,
+) -> dict[str, tuple[int, int]]:
+    """Rows and columns of each 3D array that hold data or that a line reads or writes,
+    over the whole trace, so the layers keep one size while the table fills."""
+    extents: dict[str, tuple[int, int]] = {}
+    measured: dict[int, tuple[int, int]] = {}
+    for step, scope in zip(steps, scopes):
+        for name, value in scope.items():
+            if not isinstance(value, _Cube):
+                continue
+            if id(value) not in measured:
+                content = [
+                    (row_index, column_index)
+                    for rows in value.layers.values()
+                    for row_index, row in enumerate(rows)
+                    if isinstance(row, list)
+                    for column_index, cell in enumerate(row)
+                    if _has_content(cell)
+                ]
+                measured[id(value)] = (
+                    max((row for row, _ in content), default=-1) + 1,
+                    max((column for _, column in content), default=-1) + 1,
+                )
+            height, width = measured[id(value)]
+            for _, _, cell in _cube_cells(_line_text(step, source_lines, language), name, scope, language):
+                if cell is not None and 0 <= cell[1] < MAX_VISUAL_ROWS and 0 <= cell[2] < MAX_VISUAL_COLUMNS:
+                    height, width = max(height, cell[1] + 1), max(width, cell[2] + 1)
+            previous = extents.get(name, (0, 0))
+            extents[name] = (max(previous[0], height), max(previous[1], width))
+    return extents
+
+
+_CORNERS: dict[tuple[int, int, int], list[list[Any]]] = {}
+
+
+def _layer_corner(rows: list[Any], height: int, width: int) -> list[list[Any]]:
+    """The first `height` x `width` entries of a layer, zero where nothing was read. The
+    same list is handed out while the layer is unchanged, so comparing steps is cheap."""
+    key = (id(rows), height, width)
+    if key not in _CORNERS:
+        corner = []
+        for index in range(height):
+            row = rows[index] if index < len(rows) and isinstance(rows[index], list) else []
+            part = list(row[:width])
+            corner.append(part + [0] * (width - len(part)))
+        _CORNERS[key] = corner
+    return _CORNERS[key]
+
+
+def _layers_visualization(
+    scope: dict[str, Any],
+    step: dict[str, Any],
+    name: str | None,
+    line_text: str,
+    language: str,
+    extents: dict[str, tuple[int, int]] | None = None,
+) -> dict[str, Any]:
+    """Two layers of a 3D array side by side, with the cell the line writes (`current`) and
+    the cells it reads (`reading`), usually in the layer before."""
+    if name is None:
+        cubes = sorted(
+            ((key, value) for key, value in scope.items() if isinstance(value, _Cube)),
+            key=lambda item: item[0].lower() not in DP_LIKE_NAMES,
+        )
+        name, cube = cubes[0] if cubes else (None, None)
+    else:
+        cube = scope.get(name)
+    if not isinstance(cube, _Cube) or not cube.layers:
+        return {"renderer": "layers", "ready": False}
+    used_height, used_width = (extents or {}).get(name, (0, 0))
+    height = min(used_height or MAX_VISUAL_ROWS, MAX_VISUAL_ROWS, cube.rows or MAX_VISUAL_ROWS)
+    width = min(used_width or MAX_VISUAL_COLUMNS, MAX_VISUAL_COLUMNS, cube.columns or MAX_VISUAL_COLUMNS)
+    layers = [{"index": index, "rows": _layer_corner(rows, height, width)} for index, rows in sorted(cube.layers.items())]
+    current: list[dict[str, int]] = []
+    reading: list[dict[str, int]] = []
+    readouts: list[str] = []
+    index_names: list[str] = []
+    for write, indexes, cell in _cube_cells(line_text, name, scope, language):
+        index_names.extend(index for index in indexes if re.fullmatch(r"[A-Za-z_]\w*", index) and _is_index(scope.get(index)))
+        # A negative index (`j - a[i]` before the guard `j >= a[i]` holds) is not read.
+        if cell is None or min(cell) < 0:
+            continue
+        layer, row, column = cell
+        at = {"layer": layer, "row": row, "column": column}
+        exact = f"{name}[{layer}][{row}][{column}]"
+        if write:
+            if at not in current:
+                current.append(at)
+                readouts.append(f"writes {exact}")
+            continue
+        if at in reading or at in current:
+            continue
+        reading.append(at)
+        rows = cube.layers.get(layer)
+        value = _cell(rows, row, column, None) if isinstance(rows, list) else None
+        readouts.append(f"reads {exact} = {_display_value(value, language)}" if value is not None else f"reads {exact}")
+    index_names = list(dict.fromkeys(index_names))
+    if index_names:
+        values = ", ".join(str(scope[index]) for index in index_names)
+        readouts.insert(0, f"{', '.join(index_names)} = ({values})" if len(index_names) > 1 else f"{index_names[0]} = {values}")
+    return {
+        "renderer": "layers",
+        "ready": True,
+        "name": name,
+        "uses": _unique_names([name, *index_names]),
+        "shape": [cube.length, cube.rows, cube.columns],
+        "layers": layers,
+        "current": current,
+        "reading": reading,
+        # The indexes and what the line writes and reads, as text (`reads dp[0][3][1] = 0`).
+        "details": readouts,
+        "truncated": (cube.rows or 0) > height or (cube.columns or 0) > width,
+        "event": step.get("event"),
+    }
 
 
 def _character_map(scope: dict[str, Any]) -> tuple[str | None, list[Any] | None]:

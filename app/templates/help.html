@@ -31,7 +31,7 @@
             <li>右上角 <b>Language</b> 選 Python 或 C++。</li>
             <li>把程式貼進 <b>Source code</b>。</li>
             <li>把輸入資料貼進 <b>Test data（stdin）</b>，就是平常從鍵盤輸入的內容。</li>
-            <li>按 <b>Run</b>（約 1–10 秒，C++ 比較慢）。</li>
+            <li>按 <b>Run</b>（約 1–30 秒，C++ 比較慢）。</li>
             <li>按 <kbd>→</kbd> 或 <b>›</b> 往下一步，<kbd>←</kbd> 退回上一步，<kbd>Space</kbd> 自動播放。要改程式就按 <b>Edit code</b>。</li>
         </ol>
 
@@ -47,7 +47,7 @@
         <dl class="help-terms">
             <dt>Source code</dt><dd>程式碼。執行後黃色標出目前這一行；左側是行號。</dd>
             <dt>Test data</dt><dd>stdin 輸入資料。</dd>
-            <dt>視覺化圖（上方右側）</dt><dd>依程式的樣子自動選畫法：長條圖、格子、圖（節點與邊）、並查集、遞迴樹、線段樹。用 <b>View</b> 選單可以換畫法或指定要畫的變數。</dd>
+            <dt>視覺化圖（上方右側）</dt><dd>依程式的樣子自動選畫法：長條圖、格子、三維表格（兩層並排）、圖（節點與邊）、並查集、遞迴樹、線段樹。用 <b>View</b> 選單可以換畫法或指定要畫的變數。</dd>
             <dt>Variables</dt><dd>目前的變數。左邊是單一值，右邊是陣列和容器。已經畫在圖上的變數不會在這裡重複出現；把圖收起來（Hide）就會回到這裡。</dd>
             <dt>stdout</dt><dd>程式輸出。</dd>
             <dt>時間軸（最下方）</dt><dd>拖曳滑桿可以跳到任何一步。<b>|‹</b>、<b>›|</b> 跳到目前迴圈的前後。右邊的速度選單控制自動播放速度。</dd>
@@ -57,11 +57,13 @@
         <h2 id="errors">錯誤與限制</h2>
         <ul>
             <li><b>RE</b>：執行錯誤（除以零、陣列越界、assert 失敗……）。停在出錯的那一行，前面的步驟都看得到。</li>
-            <li><b>TLE</b>：超過時間（Python 3 秒、C++ 10 秒）或超過 5000 步就停下來，前面的步驟仍然保留。</li>
+            <li><b>TLE</b>：超過時間（Python 3 秒、C++ 30 秒）或超過 5000 步就停下來，前面的步驟仍然保留。</li>
+            <li>C++ 迴圈裡的每一行最多停 1000 次，之後那一行照常執行但不再停，所以長迴圈也能跑到程式結束；之後的步驟上方會寫出是哪幾行。</li>
             <li><b>編譯或語法錯誤</b>：錯誤的那一行會在程式碼裡標紅，訊息顯示在上方。</li>
             <li>Python 只能 <code>import sys</code>，也不能用 <code>open</code>、<code>eval</code> 等函式。</li>
             <li>C++ 需要電腦上有 g++ 和 gdb；<code>unordered_map</code> 等容器只會顯示「contents not decoded」。</li>
             <li>很長的陣列只讀取前 50 項，圖上會寫「0–49 of 80 items」。</li>
+            <li>C++ 三維陣列（<code>dp[i][j][k]</code>）每一步只讀兩層：這一行寫入的 <code>dp[i]</code> 和前一層 <code>dp[i - 1]</code>，每層最多 30 列 × 40 欄。</li>
             <li>每種畫法先準備前 6 個變數；View 的變數選單裡標「(runs again)」的，選了之後會用同一份程式和輸入重跑一次再顯示（約 1–10 秒）。</li>
             <li>圖的邊是有向還是無向是從資料猜的；猜錯時用圖上方的方向選單改。</li>
             <li>演算法名稱是從程式碼猜的（「guessed from the code」），可能猜錯。</li>

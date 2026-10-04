@@ -774,6 +774,18 @@ function setMessage(text, kind = "error") {
     elements.message.textContent = text;
     elements.message.classList.toggle("hidden", !text);
     elements.message.classList.toggle("is-tle", kind === "tle");
+    elements.message.classList.toggle("is-note", kind === "note");
+}
+
+// C++ loop lines stop being traced after `loop_stop_limit` stops, so a long loop still
+// finishes; every step after that says which lines ran on unseen.
+function cappedNote(step) {
+    const lines = (state.result?.capped || []).filter((entry) => entry.step < step.step).map((entry) => entry.line);
+    if (!lines.length) return "";
+    const unique = [...new Set(lines)].sort((a, b) => a - b);
+    const limit = state.result.loop_stop_limit;
+    return `Line${unique.length > 1 ? "s" : ""} ${unique.join(", ")} stopped being shown after ${limit} runs each; `
+        + "the program kept running them without stopping, so the steps after that skip ahead.";
 }
 
 // Lines the compiler or syntax check rejected; drawn in the editor until the code changes.
@@ -1136,6 +1148,7 @@ function renderValue(value, depth, changes = null) {
     }
     if (value.type === "none") return textSpan("None", "primitive none");
 
+    if (value.type === "cube") return renderCubeValue(value);
     if (depth === 0 && isTableValue(value)) return renderTableValue(value, changedTableCells);
     if (["list", "tuple", "set", "frozenset"].includes(value.type)) {
         // A pair inside a list reads best as `(1, 2)`, not as a nested row of cells.
@@ -1213,6 +1226,18 @@ function renderValue(value, depth, changes = null) {
         return textSpan(`range(${range.start}, ${range.stop}, ${range.step})`, "primitive");
     }
     return textSpan(value.value ?? `<${displayType(value)}>`, "primitive");
+}
+
+// A 3D array arrives as the two layers read at this stop (`dp[i-1]`, `dp[i]`), each a table.
+function renderCubeValue(value) {
+    const wrapper = document.createElement("div");
+    wrapper.className = "cube-view";
+    (value.layers || []).forEach((layer) => {
+        wrapper.append(textSpan(`[${layer.index}]`, "cube-layer-label"), renderTableValue(layer.value));
+    });
+    const shown = (value.layers || []).map((layer) => layer.index).join(" and ");
+    wrapper.append(textSpan(shown ? `Layers ${shown} of ${value.length}` : "Not read yet", "fill-note"));
+    return wrapper;
 }
 
 // A 2D array: rows of single values, or C++ character rows (strings that keep NUL cells).
@@ -1332,6 +1357,7 @@ function compactValue(value, depth = 0) {
         return `${isObjectFields(value) ? value.class_name : ""}{${items.join(", ")}}`;
     }
     if (value.type === "range") return `range(${value.value.start}, ${value.value.stop}, ${value.value.step})`;
+    if (value.type === "cube") return `[${value.length}][${value.rows}][${value.columns}]`;
     return String(value.value ?? `<${displayType(value)}>`);
 }
 
@@ -1552,7 +1578,7 @@ function renderOutput(stdout) {
 
 function renderRuntimeMessage(step) {
     if (!step.exception) {
-        setMessage("");
+        setMessage(cappedNote(step), "note");
         return;
     }
     const {type, message} = step.exception;
@@ -1599,6 +1625,7 @@ function renderAlgorithm(visualization) {
     }
     const renderers = {
         grid: renderGridAlgorithm,
+        layers: renderLayersAlgorithm,
         array: renderArrayAlgorithm,
         cells: renderCellsAlgorithm,
         graph: renderGraphAlgorithm,
@@ -1698,6 +1725,91 @@ function renderGridAlgorithm(view) {
         });
     });
     elements.algorithmView.append(grid);
+}
+
+// A 3D array, two layers side by side (`dp[1]`, `dp[2]`): the cell the line writes, the
+// cells it reads (usually in the layer before), and the cells it changed.
+function renderLayersAlgorithm(view) {
+    if (!view.ready) {
+        renderAlgorithmWaiting("Waiting for the program to fill its 3D table…");
+        return;
+    }
+    const layers = view.layers || [];
+    const rows = layers[0]?.rows?.length || 0;
+    const columns = Math.max(0, ...(layers[0]?.rows || []).map((row) => row.length));
+    const meta = document.createElement("div");
+    meta.className = "algorithm-meta";
+    const dimensions = document.createElement("span");
+    const [length, height, width] = view.shape || [];
+    dimensions.textContent = `${view.name}[${length}][${height}][${width}], layers ${layers.map((layer) => layer.index).join(" and ")}`
+        + `, rows 0–${rows - 1} × columns 0–${columns - 1}${view.carried ? ", last known state" : ""}`;
+    dimensions.dataset.term = "3D table";
+    const legend = [
+        ["active", "Writing", (view.current || []).length],
+        ["reading", "Reading", (view.reading || []).length],
+        ["written", "Written", (view.written || []).length],
+    ].filter(([, , shown]) => shown).map(([kind, label]) => [kind, label]);
+    meta.append(dimensions);
+    if (legend.length) meta.append(algorithmLegend(legend));
+    if ((view.details || []).length) {
+        const readouts = document.createElement("div");
+        readouts.className = "algorithm-readouts grid-readouts";
+        view.details.forEach((text) => readouts.append(textSpan(text, "algorithm-readout")));
+        meta.append(readouts);
+    }
+    elements.algorithmView.append(meta);
+
+    const key = (cell) => `${cell.layer}:${cell.row}:${cell.column}`;
+    const writing = new Set((view.current || []).map(key));
+    const reading = new Set((view.reading || []).map(key));
+    const written = new Set((view.written || []).map(key));
+
+    // Every layer gets an equal share of the width; cells include a row and a column of indexes.
+    const area = algorithmViewArea(meta);
+    const gap = 3;
+    const panelGap = 24;
+    const titleHeight = 26;
+    const panelWidth = (area.width - panelGap * Math.max(0, layers.length - 1)) / Math.max(1, layers.length);
+    const fitted = Math.floor(Math.min(
+        (panelWidth - gap * columns) / (columns + 1),
+        (area.height - titleHeight - gap * rows) / (rows + 1),
+    ));
+    const cellSize = Math.max(20, Math.min(56, fitted));
+    const longestText = Math.max(1, ...layers.flatMap((layer) => layer.rows.flat().map((value) => gridCellText(value).length)));
+    const fontSize = Math.max(8, Math.min(cellSize * 0.38, (cellSize - 6) / (longestText * 0.62)));
+
+    const panels = document.createElement("div");
+    panels.className = "layer-panels";
+    layers.forEach((layer) => {
+        const panel = document.createElement("div");
+        panel.className = "layer-panel";
+        panel.append(textSpan(`${view.name}[${layer.index}]`, "layer-title"));
+        const grid = document.createElement("div");
+        grid.className = "algorithm-grid layer-grid";
+        grid.style.setProperty("--cell", `${cellSize}px`);
+        grid.style.setProperty("--cell-font", `${fontSize.toFixed(1)}px`);
+        grid.style.gridTemplateColumns = `repeat(${columns + 1}, ${cellSize}px)`;
+        grid.append(textSpan("", "layer-axis"));
+        for (let column = 0; column < columns; column += 1) grid.append(textSpan(String(column), "layer-axis"));
+        layer.rows.forEach((row, rowIndex) => {
+            grid.append(textSpan(String(rowIndex), "layer-axis"));
+            row.forEach((value, columnIndex) => {
+                const at = `${layer.index}:${rowIndex}:${columnIndex}`;
+                const cell = document.createElement("div");
+                cell.className = "algorithm-cell";
+                if (writing.has(at)) cell.classList.add("current");
+                if (reading.has(at)) cell.classList.add("reading");
+                if (written.has(at)) cell.classList.add("written");
+                const exact = layer.rows_text?.[rowIndex]?.[columnIndex] ?? value;
+                cell.textContent = gridCellText(exact);
+                cell.title = `${view.name}[${layer.index}][${rowIndex}][${columnIndex}] = ${exact}`;
+                grid.append(cell);
+            });
+        });
+        panel.append(grid);
+        panels.append(panel);
+    });
+    elements.algorithmView.append(panels);
 }
 
 // Booleans read as T/F so a visited table fits in its cells; `.` cells read as a dot.

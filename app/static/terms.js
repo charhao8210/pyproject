@@ -6,7 +6,9 @@
         {group: "視覺化圖的標記", term: "Visited", tip: "已經走過的格子或節點：visited / vis 陣列為 true，或距離表已經有值（-1、INF 代表還沒走到）。牆壁永遠不算。"},
         {group: "視覺化圖的標記", term: "Frontier", tip: "還在 queue 或 stack 裡、等著被處理的格子。"},
         {group: "視覺化圖的標記", term: "Current", tip: "程式現在所在的格子或節點，例如 node、u、row/col 指到的位置。"},
-        {group: "視覺化圖的標記", term: "Reading", tip: "這一步被當作索引的位置，例如 i、j、mid、l、r 指到的那一格。只標在程式真的用這個變數索引的陣列上。"},
+        {group: "視覺化圖的標記", term: "Reading", tip: "這一步被當作索引的位置，例如 i、j、mid、l、r 指到的那一格。只標在程式真的用這個變數索引的陣列上。3D 表格裡是這一行讀到的格子（黃色虛線框），例如 dp[i - 1][j][k]。"},
+        {group: "視覺化圖的標記", term: "Writing", tip: "3D 表格裡，這一行要寫入的格子（黃底），例如 dp[i][j][k] = … 的 dp[i][j][k]。圖上已經是這一行執行完的值。"},
+        {group: "視覺化圖的標記", term: "3D table", tip: "三維陣列（例如 dp[1005][305][305]）太大，每一步只讀兩層：這一行寫的那一層（dp[i]）和前一層（dp[i - 1]），左右並排。列是第二個索引、欄是第三個索引，只畫到整個執行過程中用到的範圍。"},
         {group: "視覺化圖的標記", term: "Written", tip: "被這一行寫入、值改變的格子（橘框）。"},
         {group: "視覺化圖的標記", term: "New", tip: "這一行新加進容器的元素（push、push_back、append），只在這一步標成淺藍色，下一步恢復一般顏色。"},
         {group: "視覺化圖的標記", term: "Blocked", tip: "牆壁（# 或 *），不能走。"},
@@ -41,7 +43,7 @@
         {group: "上方與時間軸", term: "call", tip: "事件 call：剛進入一個函式。"},
         {group: "上方與時間軸", term: "return", tip: "事件 return：函式要回傳了。"},
         {group: "上方與時間軸", term: "exception", tip: "事件 exception（RE，執行錯誤）：程式在這裡出錯停止，例如除以零、陣列越界、assert 失敗。"},
-        {group: "上方與時間軸", term: "stopped", tip: "事件 stopped（TLE）：超過時間限制（Python 3 秒、C++ 10 秒）或超過 5000 步，程式被停下來，前面的步驟都還在。"},
+        {group: "上方與時間軸", term: "stopped", tip: "事件 stopped（TLE）：超過時間限制（Python 3 秒、C++ 30 秒）或超過 5000 步，程式被停下來，前面的步驟都還在。"},
         {group: "上方與時間軸", term: "Loop jump", tip: "|‹ 回到這個迴圈開始之前，›| 跳到這個迴圈結束之後；不在迴圈裡時不能按。"},
     ];
 

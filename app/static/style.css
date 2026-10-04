@@ -331,6 +331,12 @@ h1 {
     color: var(--tle);
 }
 
+/* Not an error: a note about how the trace was taken (loop lines no longer stopped at). */
+.message.is-note {
+    border-left-color: var(--pencil-muted);
+    color: var(--pencil);
+}
+
 /* ---------- Workspace layout ---------- */
 
 /* `--left-width` is set while dragging the column resizer; without it the columns split 2:3. */
@@ -2428,4 +2434,54 @@ a.button {
 .reference-value[data-alias-name] {
     cursor: help;
     text-decoration: underline dotted;
+}
+
+/* A 3D array: two layers side by side, each with its row and column numbers. */
+.layer-panels {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 24px;
+}
+
+.layer-panel {
+    display: grid;
+    gap: 6px;
+    justify-items: center;
+}
+
+.layer-title {
+    color: var(--pencil);
+    font-family: var(--mono);
+    font-weight: 700;
+}
+
+.layer-grid {
+    margin: 0;
+}
+
+.layer-axis {
+    display: grid;
+    place-items: center;
+    color: var(--pencil-muted);
+    font-family: var(--mono);
+    font-size: max(9px, calc(var(--cell) * 0.3));
+}
+
+/* A cell the highlighted line reads (dp[i - 1][j][k]). */
+.algorithm-cell.reading {
+    z-index: 1;
+    border: 2px dashed var(--highlighter);
+    color: var(--pencil);
+    font-weight: 700;
+}
+
+.cube-view {
+    display: grid;
+    gap: 6px;
+}
+
+.cube-layer-label {
+    color: var(--pencil-muted);
+    font-family: var(--mono);
 }
