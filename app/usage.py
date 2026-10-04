@@ -105,7 +105,7 @@ def variable_usage(
                         effect["cells"][name] = marks
                 if single:
                     formula = assignment_formula(effect_text, name, scopes[earlier], language)
-                    if formula:
+                    if formula and not _formula_disagrees(formula["substituted"], scope.get(name)):
                         effect["formula"][name] = formula
         frame_scopes[key] = scope
         frame_steps[key] = index
@@ -165,6 +165,18 @@ def assignment_formula(line: str, name: str, scope: dict[str, Any], language: st
         expression = f"{name}{operator}{right}" if operator else right
     substituted = _substitute(expression, scope, language)
     return {"expression": expression, "substituted": substituted}
+
+
+def _formula_disagrees(substituted: str, result: Any) -> bool:
+    """True when the line ran its update more than once before the frame's next stop.
+
+    `while(t--) solve();` decrements t at every test, so t goes 1 -> -1 while the
+    formula would read `1-1 = -1`; such a formula is dropped rather than drawn wrong.
+    """
+    if isinstance(result, bool) or not isinstance(result, int) or "/" in substituted or "%" in substituted:
+        return False
+    value = _integer(substituted)
+    return value is not None and value != result
 
 
 def _right_hand_side(code: str, start: int) -> str:

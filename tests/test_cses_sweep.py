@@ -567,3 +567,37 @@ def test_sets_and_maps_of_std_arrays_are_decoded() -> None:
     [entry] = last["mp"]["entries"]
     assert [item["value"] for item in entry["key"]["items"]] == [0, 2, 1, 0] and entry["value"]["value"] is True
     assert [item["value"] for item in last["s"]["items"][0]["items"]] == [3, 1, 2]
+
+
+@requires_cpp
+def test_a_one_line_loop_stops_at_every_test_of_its_condition() -> None:
+    # `while(t--) solve();` used to stop once and jump t from 1 to -1 (`1-1 = -1`);
+    # now each test of the condition is a step of its own, around each solve() call.
+    code = (
+        "#include <bits/stdc++.h>\nusing namespace std;\nvoid solve(){ cout << 1; }\nint main(){\n"
+        "    int t;\n    t = 2;\n    while(t--) solve();\n    for(int i = 1; i <= 2; i++) cout << i;\n    return 0;\n}\n"
+    )
+    steps = run_debugger(code, language="cpp")["steps"]
+    trail = [
+        (step["function"], step["usage"]["next"].get("t", {}).get("value"), step["usage"]["formula"].get("t", {}).get("substituted"))
+        for step in steps
+        if step["line"] in (3, 7)
+    ]
+    assert trail == [
+        ("main", 1, "2-1"), ("main", None, None), ("solve", None, None),
+        ("main", 0, "1-1"), ("main", None, None), ("solve", None, None),
+        ("main", -1, "0-1"),
+    ]
+    # The for loop's own `i` is shown at its extra stops, and `i++` is a step of its own.
+    values = [step["locals"]["i"]["value"] for step in steps if step["line"] == 8 and "i" in step["locals"]]
+    assert values[:2] == [1, 1] and 2 in values and values[-1] == 3
+    loop = next(step["loop"] for step in steps if step["line"] == 7)
+    assert steps[loop["after"]]["line"] == 8
+
+
+def test_a_formula_that_disagrees_with_the_result_is_dropped() -> None:
+    from app.usage import _formula_disagrees
+
+    assert _formula_disagrees("1-1", -1)
+    assert not _formula_disagrees("1-1", 0)
+    assert not _formula_disagrees("7/2", 3)

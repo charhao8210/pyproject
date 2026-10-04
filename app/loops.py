@@ -14,7 +14,8 @@ class Loop(NamedTuple):
     last_line: int
     # GDB stops on a C++ `for`/`while` header only when the loop is entered, not on
     # every iteration, so a stop there begins a new run of the loop. Python reports
-    # the header on every iteration.
+    # the header on every iteration, and so does C++ for a loop written on one line
+    # (`while(t--) solve();`, `cpp_runner._one_line_loop_addresses`).
     header_starts_run: bool
 
 
@@ -62,7 +63,8 @@ def _cpp_loop_ranges(source: str) -> list[Loop]:
             continue
         end = _statement_end(text, index, _skip_spaces(text, closing + 1))
         if end is not None:
-            ranges.append(Loop(index.line_of(match.start()), index.line_of(end), True))
+            first, last = index.line_of(match.start()), index.line_of(end)
+            ranges.append(Loop(first, last, first != last))
     return ranges
 
 

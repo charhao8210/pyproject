@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from .analyzer import analyze_execution
+from .loops import loop_ranges
 from .cpp_source import (
     TREE_KINDS,
     SourceModel,
@@ -40,6 +41,12 @@ VECTOR_END_MARKER = "__PVDBG_VECTOR_END__"
 SCOPE_MARKER = "__PVDBG_SCOPE__"
 SCOPE_END_MARKER = "__PVDBG_SCOPE_END__"
 TYPE_MARKER = "__PVDBG_TYPE__"
+SYMBOL_MARKER = "__PVDBG_SYMBOL__"
+# Printed by the extra stops inside a one-line loop (`while(t--) solve();`).
+REPEAT_MARKER = "__PVDBG_REPEAT__"
+# Extra stops per one-line loop line before they are switched off: an input loop over
+# 2e5 numbers would otherwise spend the whole time limit reading.
+MAX_REPEAT_STOPS = 150
 TAIL_MARKER = "@tail"
 TABLE_MARKER = "@rows"
 HEAP_MARKER = "@heap"
@@ -89,6 +96,9 @@ class _Discovery:
     global_specs: list[ValueSpec] = field(default_factory=list)
     # Lines whose breakpoint has several locations; one can sit in another line's code.
     multi_location: set[int] = field(default_factory=set)
+    # One-line loops (`while(t--) solve();`): the line's other code addresses (its
+    # condition, its body, `i++`), where GDB stops on every iteration as well.
+    repeat_addresses: dict[int, list[int]] = field(default_factory=dict)
 
 
 class CppCompilationError(ValueError):
@@ -167,12 +177,14 @@ def run_cpp_debugger(
                 model,
                 workdir,
                 creation_flags,
+                _one_line_loop_addresses(source, executable_path, workdir, creation_flags),
             )
             trace_output, trace_errors, timed_out = _run_trace(
                 debugger,
                 executable_path,
                 discovery.break_lines,
                 _extraction_plan(model, discovery, source),
+                discovery.repeat_addresses,
                 max_steps,
                 timeout_seconds,
                 workdir,
@@ -256,11 +268,17 @@ def _compile_source(
             compiler,
             "-std=c++17",
             "-g",
+            # DWARF 4: MinGW's objdump misnames DWARF 5 line-table files, and
+            # `_one_line_loop_addresses` reads that table.
+            "-gdwarf-4",
             "-O0",
             "-fno-omit-frame-pointer",
             "-include",
             PRELUDE_FILENAME,
             str(source_path.name),
+            # A fixed load address: the one-line loop stops are `break *0x…` on addresses
+            # read from the file, which GDB does not move when the image is relocated.
+            "-Wl,--disable-dynamicbase" if os.name == "nt" else "-no-pie",
             "-o",
             str(executable_path.name),
         ],
@@ -288,11 +306,13 @@ def _discover(
     model: SourceModel,
     workdir: Path,
     creation_flags: int,
+    loop_addresses: dict[int, list[int]] | None = None,
 ) -> _Discovery:
     """Find breakpoint lines, DWARF scopes, and the types of namespace-scope variables."""
     candidates = _candidate_lines(source)
     if not candidates:
         return _Discovery()
+    loop_addresses = loop_addresses or {}
     commands = [
         "set pagination off",
         "set confirm off",
@@ -313,6 +333,9 @@ def _discover(
                 f"echo {SCOPE_END_MARKER}\\n",
             ]
         )
+    for line, addresses in loop_addresses.items():
+        for address in addresses:
+            commands.extend([f"echo {SYMBOL_MARKER}{line} {address:#x}\\n", f"info symbol {address:#x}"])
     script_path = workdir / "discover.gdb"
     script_path.write_text("\n".join(commands) + "\n", encoding="utf-8")
     # Each -ex command is isolated: an unknown name only fails its own whatis.
@@ -354,6 +377,7 @@ def _discover(
     )
     discovery = _Discovery()
     break_lines: set[int] = set()
+    break_addresses: dict[int, int] = {}
     cursor = 0
     for match in scope_pattern.finditer(output):
         segment = output[cursor : match.start()]
@@ -368,11 +392,15 @@ def _discover(
         break_lines.add(line)
         if resolved[-1][1]:
             discovery.multi_location.add(line)
+        address = re.search(rf"Breakpoint\s+\d+\s+at\s+(0x[0-9a-f]+):\s+file\s+{re.escape(CPP_FILENAME)},\s+line\s+{line}\.", segment)
+        if address:
+            break_addresses[line] = int(address.group(1), 16)
         body = match.group(2)
         if "Scope for" in body or "no locals" in body.lower():
             names = frozenset(re.findall(r"^Symbol\s+([A-Za-z_]\w*)\s+is\b", body, re.MULTILINE))
             discovery.scopes[line] = discovery.scopes.get(line, frozenset()) | names
     discovery.break_lines = sorted(break_lines)
+    discovery.repeat_addresses = _repeat_addresses(output, loop_addresses, break_addresses, discovery.multi_location)
 
     types = dict(
         re.findall(rf"{TYPE_MARKER}([A-Za-z_]\w*)\r?\ntype = ([^\r\n]+)", output)
@@ -399,6 +427,77 @@ def _discover(
             )
         )
     return discovery
+
+
+def _one_line_loop_addresses(
+    source: str,
+    executable_path: Path,
+    workdir: Path,
+    creation_flags: int,
+) -> dict[int, list[int]]:
+    """Every statement address the line table gives each one-line loop's line.
+
+    GDB merges a line's entries, so `break file:line` stops once, before the loop;
+    objdump lists them all (`while(t--) solve();`: the jump, the call, the condition).
+    """
+    lines = {loop.first_line for loop in loop_ranges(source, "cpp") if loop.first_line == loop.last_line}
+    objdump = shutil.which("objdump")
+    if not lines or not objdump:
+        return {}
+    try:
+        completed = subprocess.run(
+            [objdump, "--dwarf=decodedline", executable_path.name],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=8,
+            cwd=workdir,
+            creationflags=creation_flags,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return {}
+    addresses: dict[int, set[int]] = {}
+    for match in re.finditer(
+        rf"^{re.escape(CPP_FILENAME)}\s+(\d+)\s+(0x[0-9a-f]+)(?:\s+\d+)?\s+x\s*$",
+        completed.stdout,
+        re.MULTILINE,
+    ):
+        line = int(match.group(1))
+        if line in lines:
+            addresses.setdefault(line, set()).add(int(match.group(2), 16))
+    return {line: sorted(found) for line, found in addresses.items() if len(found) > 1}
+
+
+def _repeat_addresses(
+    output: str,
+    loop_addresses: dict[int, list[int]],
+    break_addresses: dict[int, int],
+    multi_location: set[int],
+) -> dict[int, list[int]]:
+    """The addresses after a one-line loop's breakpoint that lie in the same function.
+
+    A lambda written on the line has code of its own there, where the line's
+    extraction commands would name the wrong frame's variables and kill the trace.
+    """
+    symbols = {
+        (int(line), int(address, 16)): name
+        for line, address, name in re.findall(
+            rf"{SYMBOL_MARKER}(\d+) (0x[0-9a-f]+)\r?\n(.+?)(?: \+ \d+)? in section",
+            output,
+        )
+    }
+    result: dict[int, list[int]] = {}
+    for line, addresses in loop_addresses.items():
+        start = break_addresses.get(line)
+        if start is None or line in multi_location or (line, start) not in symbols:
+            continue
+        function = symbols[(line, start)]
+        extra = [address for address in addresses if address > start and symbols.get((line, address)) == function]
+        if extra:
+            result[line] = extra
+    return result
 
 
 def _candidate_lines(source: str) -> list[int]:
@@ -735,6 +834,7 @@ def _run_trace(
     executable_path: Path,
     break_lines: list[int],
     plan: dict[int, list[str]],
+    repeat_addresses: dict[int, list[int]],
     max_steps: int,
     timeout_seconds: float,
     workdir: Path,
@@ -751,34 +851,57 @@ def _run_trace(
         "set print null-stop on",
         "set width 0",
         "set $pv_steps = 0",
+        *(f"set $pv_rep_{line} = 0" for line in repeat_addresses),
         *plan.get(0, []),
     ]
+    # Breakpoints are numbered in the order this script creates them.
+    number = 0
     for line in break_lines:
-        commands.extend(
-            [
-                f"break {CPP_FILENAME}:{line}",
-                "commands",
-                "silent",
-                "set $pv_steps = $pv_steps + 1",
-                f"if $pv_steps > {max_steps}",
-                f"echo {LIMIT_MARKER}\\n",
-                "kill",
-                "quit",
-                "end",
-                f"echo {BEGIN_MARKER}\\n",
-                "frame",
-                f"echo {ARGS_MARKER}\\n",
-                "info args",
-                f"echo {LOCALS_MARKER}\\n",
-                "info locals",
-                *plan.get(line, []),
-                f"echo {STACK_MARKER}\\n",
-                "backtrace 30",
-                f"echo {END_MARKER}\\n",
-                "continue",
-                "end",
-            ]
-        )
+        number += 1
+        locations = [f"{CPP_FILENAME}:{line}"]
+        repeats = repeat_addresses.get(line, [])
+        first_repeat = number + 1
+        locations += [f"*{address:#x}" for address in repeats]
+        number += len(repeats)
+        for location in locations:
+            repeat = location.startswith("*")
+            commands.extend(
+                [
+                    f"break {location}",
+                    "commands",
+                    "silent",
+                    "set $pv_steps = $pv_steps + 1",
+                    f"if $pv_steps > {max_steps}",
+                    f"echo {LIMIT_MARKER}\\n",
+                    "kill",
+                    "quit",
+                    "end",
+                    *(
+                        [
+                            f"set $pv_rep_{line} = $pv_rep_{line} + 1",
+                            # Past the cap the rest of the loop runs without stopping, as before.
+                            f"if $pv_rep_{line} >= {MAX_REPEAT_STOPS}",
+                            f"disable {first_repeat}-{first_repeat + len(repeats) - 1}",
+                            "end",
+                        ]
+                        if repeat
+                        else []
+                    ),
+                    f"echo {BEGIN_MARKER}\\n",
+                    *([f"echo {REPEAT_MARKER}\\n"] if repeat else []),
+                    "frame",
+                    f"echo {ARGS_MARKER}\\n",
+                    "info args",
+                    f"echo {LOCALS_MARKER}\\n",
+                    "info locals",
+                    *plan.get(line, []),
+                    f"echo {STACK_MARKER}\\n",
+                    "backtrace 30",
+                    f"echo {END_MARKER}\\n",
+                    "continue",
+                    "end",
+                ]
+            )
     commands.append("run < input.txt")
     script_path = workdir / "trace.gdb"
     script_path.write_text("\n".join(commands) + "\n", encoding="utf-8")
@@ -1147,6 +1270,10 @@ def _parse_trace(
         step = _parse_step_block(
             match.group(1), len(steps), captured_stdout, model, last_globals, parsed_values
         )
+        if step is not None and step.pop("repeat", False) and steps and _same_stop(steps[-1], step):
+            # A one-line loop's jump to its condition, or its body right after the
+            # condition held: nothing changed since the stop before.
+            step = None
         if step is not None:
             steps.append(step)
         previous_end = match.end()
@@ -1163,6 +1290,10 @@ def _parse_trace(
         tail = tail[:partial]
     captured_stdout += _clean_program_output(tail)
     return steps, captured_stdout, incomplete_line
+
+
+def _same_stop(earlier: dict[str, Any], later: dict[str, Any]) -> bool:
+    return all(earlier.get(key) == later.get(key) for key in ("function", "line", "locals", "globals", "stdout", "stack"))
 
 
 def _parse_step_block(
@@ -1187,6 +1318,9 @@ def _parse_step_block(
         return None
     line = int(frame_match.group(2))
     function_name = _frame_name(frame_match.group(0), frame_match.group(1).strip(), line, model)
+    # An extra stop inside a one-line loop comes after the line's own declarations ran
+    # (`for(int i = 0; ...)`), so its `i` is real, not garbage.
+    repeat = REPEAT_MARKER in header
 
     extracted_locals = _parse_marked_values(locals_text, VECTOR_MARKER)
     extracted_globals = _parse_marked_values(locals_text, GLOBAL_MARKER)
@@ -1220,7 +1354,10 @@ def _parse_step_block(
     local_values = {
         name: value
         for name, value in _parse_variables(plain_locals_text).items()
-        if _declared_before(model, name, line) and name not in model.line_declarations.get(line, ())
+        if (
+            (repeat and name in model.line_declarations.get(line, ()))
+            or (_declared_before(model, name, line) and name not in model.line_declarations.get(line, ()))
+        )
     }
     variables = {**arguments, **local_values, **extracted_locals}
     # Containers mostly repeat unchanged between stops; parsing a table again is the slow part.
@@ -1261,6 +1398,7 @@ def _parse_step_block(
         "globals": globals_,
         "stack": _parse_stack(stack_text, model),
         "stdout": stdout,
+        **({"repeat": True} if repeat else {}),
     }
 
 
