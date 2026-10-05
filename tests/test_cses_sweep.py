@@ -185,6 +185,7 @@ def test_an_unwound_python_exception_names_the_line_that_raised_it() -> None:
 def test_cpp_exit_codes_are_decimal_and_asserts_name_their_condition() -> None:
     source = (
         "#include <bits/stdc++.h>\n"
+        "#include <cassert>\n"
         "using namespace std;\n"
         "int main() {\n"
         "    int n;\n"

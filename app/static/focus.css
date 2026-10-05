@@ -1,0 +1,93 @@
+/* Shared by the original graph/grid views and the compact recursion path. */
+.focus-recursion-meta { flex-wrap: wrap; position: sticky; top: -16px; z-index: 2; padding: 10px 0; background: var(--sheet); }
+.focus-meta-title { color: var(--pencil); font-weight: 700; }
+.focus-slice-note { color: var(--pencil-faint); font: 12px/1.5 var(--mono); overflow-wrap: anywhere; }
+.focus-call-path { display: flex; flex-direction: column; gap: 10px; max-width: 960px; margin: 0 auto; padding-bottom: 20px; }
+.focus-call { margin-left: calc(var(--focus-depth, 0) * 12px); padding: 10px 12px; border: 1px solid var(--rule); border-left: 3px solid var(--pencil-faint); border-radius: var(--radius); background: var(--sheet-raised); color: var(--pencil); min-width: 0; }
+.focus-call.is-current { border-color: var(--highlighter); border-left-width: 5px; }
+.focus-call.is-on-path { border-left-color: var(--highlighter); }
+.focus-call.is-returned { border-left-color: var(--visited-mark); }
+.focus-call-heading { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 12px; }
+.focus-call-title { min-width: 0; padding: 0; border: 0; background: transparent; color: var(--pencil); font: 700 14px/1.6 var(--mono); text-align: left; cursor: pointer; overflow-wrap: anywhere; }
+.focus-call-title:hover { text-decoration: underline; text-underline-offset: 3px; }
+.focus-call-status { flex: none; color: var(--pencil-faint); font: 11px/1.5 var(--mono); }
+.focus-call.is-current .focus-call-status { color: var(--on-highlighter); background: var(--highlighter); padding: 1px 7px; border-radius: 2px; }
+.focus-call-detail { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 16px; color: var(--pencil-faint); font: 12px/1.6 var(--mono); }
+.focus-call-return { color: var(--visited-mark); overflow-wrap: anywhere; }
+.focus-call-end { border: 0; padding: 0; background: transparent; color: var(--ink); font: inherit; cursor: pointer; }
+.focus-call-end:hover { text-decoration: underline; }
+.focus-call-summary { margin-left: calc(var(--focus-depth, 0) * 12px); border-left: 1px dashed var(--rule); padding-left: 9px; }
+.focus-summary-toggle { width: 100%; min-height: 34px; padding: 5px 8px; border: 1px dashed var(--rule); border-radius: var(--radius); background: var(--sheet); color: var(--pencil-muted); font: 12px/1.6 var(--mono); text-align: left; cursor: pointer; }
+.focus-summary-toggle:hover { border-color: var(--pencil-muted); color: var(--pencil); }
+.focus-completed-calls { display: flex; flex-direction: column; gap: 8px; padding: 10px 0; }
+.focus-completed-calls .focus-call { margin-left: 0; }
+.focus-call-paging { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px; color: var(--pencil-faint); font: 11px/1.5 var(--mono); }
+.focus-small-button { min-height: 28px; padding: 3px 8px; border: 1px solid var(--rule); border-radius: var(--radius); background: var(--sheet-raised); color: var(--pencil); font: 12px var(--mono); cursor: pointer; }
+.focus-small-button:disabled { opacity: .4; cursor: default; }
+.focus-call-title:focus-visible, .focus-call-end:focus-visible, .focus-summary-toggle:focus-visible, .focus-small-button:focus-visible, .focus-frontier-details summary:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
+.focus-operation { display: block; position: sticky; top: 0; left: 0; z-index: 5; box-sizing: border-box; max-width: 100%; margin: 0 0 9px; padding: 0; border: 1px solid var(--rule); border-left: 3px solid var(--ink); border-radius: var(--radius); background: var(--sheet); color: var(--pencil-muted); font: 12px/1.5 var(--mono); box-shadow: 0 3px 8px color-mix(in srgb, var(--paper) 75%, transparent); }
+.focus-operation-summary { display: grid; grid-template-columns: 10px minmax(0, 1fr); align-items: baseline; gap: 1px 6px; padding: 5px 8px; list-style: none; cursor: pointer; }
+.focus-operation-summary::-webkit-details-marker { display: none; }
+.focus-operation-summary::before { content: "▸"; grid-column: 1; grid-row: 1; color: var(--ink); }
+.focus-operation[open] > .focus-operation-summary::before { content: "▾"; }
+.focus-operation-summary:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+.focus-operation-primary { grid-column: 2; grid-row: 1; min-width: 0; color: var(--pencil); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.focus-operation-range { flex-basis: 100%; color: var(--pencil-faint); font-size: 11px; min-width: 0; overflow-wrap: anywhere; }
+.focus-operation-range[hidden] { display: none; }
+.focus-operation-body { position: absolute; top: 100%; left: -1px; right: -1px; z-index: 6; display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 14px; max-height: var(--focus-detail-height, 170px); overflow: auto; padding: 10px 12px; border: 1px solid var(--rule); background: var(--sheet); box-shadow: 0 5px 12px color-mix(in srgb, var(--paper) 80%, transparent); }
+.focus-operation:not([open]) > .focus-operation-body { display: none; }
+.focus-operation-title { color: var(--pencil); }
+.focus-operation-chips { display: flex; flex-wrap: wrap; gap: 5px 8px; flex-basis: 100%; }
+.focus-write-chip, .focus-read-chip { max-width: 100%; padding: 2px 6px; border: 1px solid var(--rule); border-radius: 3px; overflow-wrap: anywhere; }
+.focus-write-chip { color: var(--write); border-color: color-mix(in srgb, var(--write) 45%, var(--rule)); }
+.focus-read-chip { color: var(--ink); border-style: dashed; border-color: color-mix(in srgb, var(--ink) 60%, var(--rule)); }
+.focus-formula { flex-basis: 100%; color: var(--pencil); white-space: pre-wrap; overflow-wrap: anywhere; }
+.focus-candidate { color: var(--string); }
+.focus-operation-source { flex-basis: 100%; }
+.focus-operation-source summary { width: max-content; max-width: 100%; cursor: pointer; color: var(--pencil-faint); }
+.focus-operation-source code { display: block; padding: 5px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.focus-grid { padding: 0 0 10px; margin-top: 8px; }
+.focus-grid-axis { display: grid; place-items: center; min-height: 24px; color: var(--pencil-faint); font: 11px var(--mono); }
+.focus-grid-corner { font-size: 9px; white-space: nowrap; }
+.algorithm-cell.focus-reading { outline: 2px dashed var(--ink); outline-offset: -4px; }
+.focus-reading-key { color: var(--ink); font: 11px/1.5 var(--mono); }
+.array-column.focus-reading .array-bar, .cells-item.focus-reading { outline: 2px dashed var(--ink); outline-offset: -2px; }
+.array-column[hidden], .cells-item[hidden] { display: none; }
+.focus-range-note { flex-basis: 100%; color: var(--pencil-muted); font: 12px/1.6 var(--mono); margin-bottom: 7px; overflow-wrap: anywhere; }
+.focus-sorting-state { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 14px; margin-bottom: 10px; font: 12px/1.6 var(--mono); }
+.focus-pivot-note { color: var(--on-highlighter); background: var(--highlighter); padding: 2px 7px; border-radius: 2px; }
+.focus-pivot .array-bar, .cells-item.focus-pivot { box-shadow: 0 0 0 2px var(--highlighter); }
+.focus-buffer-values { display: flex; flex-wrap: wrap; gap: 5px; max-height: 160px; overflow: auto; padding: 6px 0; }
+.focus-buffer-cell { color: var(--pencil-muted); background: var(--sheet); border: 1px solid var(--rule); border-radius: 3px; padding: 3px 7px; font: 12px/1.6 var(--mono); overflow-wrap: anywhere; }
+.focus-vertex-state { fill: var(--pencil-muted); font: 11px var(--mono); text-anchor: middle; paint-order: stroke; stroke: var(--sheet); stroke-width: 3; }
+.algorithm-graph-node.focus-muted, .algorithm-graph-edge.focus-muted, .algorithm-graph-weight.focus-muted, .segment-node.focus-muted, .segment-edge.focus-muted { opacity: .2; transition: opacity .15s ease; }
+.algorithm-graph-node.focus-muted:hover, .algorithm-graph-node.focus-muted:focus, .segment-node.focus-muted:hover { opacity: 1; }
+.algorithm-graph-node.focus-find-path > circle:not(.queue-ring):not(.reading-ring) { stroke: var(--ink); stroke-width: 2px; }
+.algorithm-graph-node:focus-visible > circle { stroke: var(--ink); stroke-width: 3px; }
+.focus-frontier-summary { white-space: normal; overflow-wrap: anywhere; }
+.focus-frontier-details { flex-basis: 100%; min-width: 0; font: 12px/1.6 var(--mono); }
+.focus-frontier-details summary { width: max-content; max-width: 100%; cursor: pointer; color: var(--pencil-faint); }
+.focus-frontier-items { max-height: 160px; overflow: auto; display: flex; flex-wrap: wrap; gap: 4px 22px; margin: 6px 0 0; padding: 4px 24px; color: var(--pencil-muted); }
+.focus-frontier-items li { padding: 2px 4px; }
+.graph-meta, .algorithm-meta:has(.focus-slice-note) { flex-wrap: wrap; }
+.segment-node.focus-full-overlap rect { stroke: var(--visited-mark); stroke-width: 2; }
+.segment-node.focus-partial-overlap rect { stroke: var(--ink); stroke-dasharray: 4 3; }
+.segment-node.focus-no-overlap rect { stroke: var(--pencil-faint); }
+.segment-node.current rect { stroke: var(--highlighter); stroke-width: 3; }
+.focus-lazy-label { fill: var(--string); font: 11px var(--mono); text-anchor: middle; paint-order: stroke; stroke: var(--sheet); stroke-width: 3; }
+.focus-segment-hidden { display: none; }
+.focus-segment-folded { fill: var(--pencil-faint); font: 10px var(--mono); text-anchor: middle; }
+.focus-compact-segment { max-width: none; }
+.focus-array-paging { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 8px 14px; padding: 10px 0; }
+.focus-grid-navigation { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 6px; padding: 8px 0; }
+@media (max-width: 700px) {
+    .focus-call { margin-left: calc(var(--focus-depth, 0) * 5px); padding: 8px; }
+    .focus-call-summary { margin-left: calc(var(--focus-depth, 0) * 5px); }
+    .focus-call-title { font-size: 12px; }
+    .focus-operation-summary { padding: 5px 6px; }
+    .focus-operation-body { padding: 8px; }
+    .focus-frontier-items { max-height: 120px; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .algorithm-graph-node.focus-muted, .algorithm-graph-edge.focus-muted, .algorithm-graph-weight.focus-muted, .segment-node.focus-muted, .segment-edge.focus-muted { transition: none; }
+}

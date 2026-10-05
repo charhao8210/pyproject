@@ -6,7 +6,10 @@ import re
 from typing import Any
 
 
-MAX_TREE_NODES = 400
+# Calls are lightweight metadata; rendering budgets are applied by the focused view.
+# The trace itself has a bounded step count, so keeping call identities avoids losing
+# the current path once an exhaustive search passes its 400th call.
+MAX_TREE_NODES = 20_000
 MAX_LABEL_LENGTH = 48
 _CPP_CHAR_VALUE = re.compile(r"-?\d+ ('(?:\\.|[^'\\])*')")
 
@@ -75,6 +78,7 @@ def build_recursion_tree(
         current = path[-1] if path else None
         if language != "cpp" and step.get("event") == "return" and current is not None and "return_value" in step:
             nodes[current]["return_value"] = _format_value(step["return_value"])
+            nodes[current]["end_step"] = index
         per_step.append({
             "current": current,
             "uses": list(nodes[current]["params"]) if current is not None else [],

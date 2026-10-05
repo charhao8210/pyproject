@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import builtins
+import bisect as _algorithm_bisect
+import collections as _algorithm_collections
+import heapq as _algorithm_heapq
 import io
+import math as _algorithm_math
 import sys
 from types import FrameType, SimpleNamespace
 from typing import Any, Callable
 
 from .serializer import SerializationContext, serialize_locals, serialize_value
+from .validator import ALGORITHM_MODULE_MEMBERS, SAFE_IMPORT_MESSAGE
 
 
 USER_FILENAME = "<user_code>"
@@ -120,6 +125,21 @@ def _safe_builtins(
     safe_sys: SimpleNamespace,
 ) -> dict[str, Any]:
     allowed = {name: getattr(builtins, name) for name in SAFE_BUILTIN_NAMES}
+    algorithm_modules = {
+        "heapq": _algorithm_heapq,
+        "bisect": _algorithm_bisect,
+        "collections": _algorithm_collections,
+        "math": _algorithm_math,
+    }
+    safe_modules = {
+        name: SimpleNamespace(**{
+            member: getattr(module, member)
+            for member in ALGORITHM_MODULE_MEMBERS[name]
+            if hasattr(module, member)
+        })
+        for name, module in algorithm_modules.items()
+    }
+    safe_modules["sys"] = safe_sys
 
     def safe_input(prompt: object = "") -> str:
         if prompt:
@@ -136,10 +156,13 @@ def _safe_builtins(
         fromlist: tuple[str, ...] = (),
         level: int = 0,
     ) -> SimpleNamespace:
-        del globals, locals, fromlist
-        if name == "sys" and level == 0:
-            return safe_sys
-        raise ImportError("Only the sys module is available for standard input.")
+        del globals, locals
+        if level != 0 or name not in safe_modules:
+            raise ImportError(SAFE_IMPORT_MESSAGE)
+        members = ALGORITHM_MODULE_MEMBERS[name]
+        if any(member not in members for member in (fromlist or ())):
+            raise ImportError("Only listed public members of algorithm modules may be imported.")
+        return safe_modules[name]
 
     allowed["input"] = safe_input
     allowed["__import__"] = safe_import
@@ -152,6 +175,8 @@ class ExecutionTracer:
         output: CappedOutput,
         max_steps: int,
         on_step: Callable[[dict[str, Any]], None] | None = None,
+        capture_items: int = 50,
+        capture_depth: int = 4,
     ) -> None:
         if max_steps < 1:
             raise ValueError("max_steps must be at least 1")
@@ -160,6 +185,8 @@ class ExecutionTracer:
         self.steps: list[dict[str, Any]] = []
         self.stopped = False
         self.on_step = on_step
+        self.capture_items = capture_items
+        self.capture_depth = capture_depth
 
     def trace(self, frame: FrameType, event: str, arg: Any) -> Callable[..., Any] | None:
         if frame.f_code.co_filename != USER_FILENAME:
@@ -204,7 +231,7 @@ class ExecutionTracer:
         return depth
 
     def _snapshot(self, frame: FrameType, event: str, arg: Any) -> dict[str, Any]:
-        context = SerializationContext()
+        context = SerializationContext(max_items=self.capture_items, max_depth=self.capture_depth)
         snapshot: dict[str, Any] = {
             "step": len(self.steps),
             "event": event,
@@ -222,7 +249,7 @@ class ExecutionTracer:
         }
         if event == "return":
             snapshot["return_value"] = serialize_value(
-                arg, context=SerializationContext()
+                arg, context=SerializationContext(max_items=self.capture_items, max_depth=self.capture_depth)
             )
         elif event == "exception":
             exception_type, exception_value, _ = arg
@@ -253,7 +280,7 @@ class ExecutionTracer:
         return {"stack": frames, "depth": depth}
 
     def _append_stopped_step(self, frame: FrameType) -> None:
-        context = SerializationContext()
+        context = SerializationContext(max_items=self.capture_items, max_depth=self.capture_depth)
         snapshot = {
                 "step": len(self.steps),
                 "event": "stopped",
@@ -291,12 +318,14 @@ def trace_code(
     stdin_text: str = "",
     max_steps: int = DEFAULT_MAX_STEPS,
     on_step: Callable[[dict[str, Any]], None] | None = None,
+    capture_items: int = 50,
+    capture_depth: int = 4,
 ) -> dict[str, Any]:
     output = CappedOutput()
     input_buffer = io.BytesIO(stdin_text.encode("utf-8"))
     input_stream = io.TextIOWrapper(input_buffer, encoding="utf-8", newline=None)
     safe_sys = SimpleNamespace(stdin=input_stream)
-    tracer = ExecutionTracer(output, max_steps, on_step=on_step)
+    tracer = ExecutionTracer(output, max_steps, on_step=on_step, capture_items=capture_items, capture_depth=capture_depth)
     namespace: dict[str, Any] = {
         "__name__": "__main__",
         "__builtins__": _safe_builtins(input_stream, output, safe_sys),

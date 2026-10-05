@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import math
 import types
+from collections import deque
 from dataclasses import dataclass, field
+from itertools import islice
 from typing import Any
 
 
@@ -67,7 +69,7 @@ def serialize_value(
             "truncated": len(value) > 100,
         }
 
-    if isinstance(value, (list, tuple, dict, set, frozenset)):
+    if isinstance(value, (list, tuple, dict, set, frozenset, deque)):
         return _serialize_container(value, context, depth)
 
     if isinstance(value, types.FunctionType):
@@ -144,7 +146,7 @@ def _serialize_instance(
 
 
 def _serialize_container(
-    value: list[Any] | tuple[Any, ...] | dict[Any, Any] | set[Any] | frozenset[Any],
+    value: list[Any] | tuple[Any, ...] | dict[Any, Any] | set[Any] | frozenset[Any] | deque[Any],
     context: SerializationContext,
     depth: int,
 ) -> dict[str, Any]:
@@ -153,8 +155,13 @@ def _serialize_container(
         return {"type": "reference", "object_id": object_id}
 
     context.seen.add(object_id)
-    type_name = type(value).__name__
+    # Sequence/mapping subclasses keep the wire shapes the existing views decode.
+    type_name = "list" if isinstance(value, deque) else "dict" if isinstance(value, dict) else type(value).__name__
     result: dict[str, Any] = {"type": type_name, "object_id": object_id}
+    if isinstance(value, deque):
+        result.update(class_name="deque", length=len(value), maxlen=value.maxlen)
+    elif isinstance(value, dict) and type(value) is not dict:
+        result["python_type"] = type(value).__name__
 
     if depth >= context.max_depth:
         result["truncated"] = True
@@ -170,6 +177,16 @@ def _serialize_container(
             for key, item in pairs[: context.max_items]
         ]
         if len(pairs) > context.max_items:
+            result["truncated"] = True
+            result["length"] = len(pairs)
+        return result
+
+    if isinstance(value, deque):
+        result["items"] = [
+            serialize_value(item, context=context, depth=depth + 1)
+            for item in islice(value, context.max_items)
+        ]
+        if len(value) > context.max_items:
             result["truncated"] = True
         return result
 

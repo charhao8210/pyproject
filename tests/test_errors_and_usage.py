@@ -17,7 +17,8 @@ def _post(payload: dict) -> httpx.Response:
 
 
 def test_infinite_recursion_is_a_runtime_error_at_the_recursive_call() -> None:
-    result = run_debugger("def f(n):\n    return f(n + 1)\n\nf(0)\n")
+    # This verifies exception attribution, independent of checkpoint I/O speed.
+    result = run_debugger("def f(n):\n    return f(n + 1)\n\nf(0)\n", timeout_seconds=10)
 
     assert result["status"] == "exception"
     assert result["error"]["type"] == "RecursionError"

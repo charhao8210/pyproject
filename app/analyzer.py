@@ -11,11 +11,13 @@ from .recursion import build_recursion_tree
 from .serializer import MAX_ITEMS
 from .inputs import input_values
 from .usage import front_removed, variable_usage
+from . import lenses
 
 
 MAX_VISUAL_ROWS = 30
 MAX_VISUAL_COLUMNS = 40
 MAX_VISUAL_ITEMS = 60
+MAX_CAPTURE_ITEMS = 500
 
 
 @dataclass(frozen=True)
@@ -119,6 +121,7 @@ def analyze_execution(
     *,
     language: str = "python",
     extra_views: Iterable[str] = (),
+    bindings: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     decoded: dict[int, Any] = {}
     scopes = [_decode_scope(step, decoded) for step in steps]
@@ -145,6 +148,25 @@ def analyze_execution(
 
     # Every view the user can pick is computed up front, so switching views needs no re-run.
     catalog = _view_catalog(scopes, steps, set(extra_views))
+    inferred_profile = profile
+    bindings = {key: value for key, value in (bindings or {}).items() if isinstance(value, str) and value}
+    catalog.extend(lenses.extend_catalog(source, scopes, steps, language=language, bindings=bindings))
+    manual_mode = bindings.get("mode", "auto")
+    primary = bindings.get("primary")
+    manual_renderers = {"dp": "grid", "sorting": "array", "graph": "graph", "dsu": "dsu"}
+    if manual_mode in manual_renderers and primary:
+        renderer = manual_renderers[manual_mode]
+        if manual_mode == "dp" and not any(_is_grid(scope.get(primary)) for scope in scopes):
+            renderer = "array"
+        manual_id = f"{renderer}:{primary}"
+        if not any(item["id"] == manual_id for item in catalog):
+            catalog.insert(0, {"id": manual_id, "renderer": renderer, "variable": primary})
+        for item in catalog:
+            if item["id"] == manual_id:
+                item.pop("pending", None)
+        profile = replace(profile, kind="dynamic_programming" if manual_mode == "dp" else manual_mode,
+                          name={"dp": "Dynamic programming", "sorting": "Sorting", "graph": "Graph", "dsu": "Union-find"}[manual_mode],
+                          renderer=renderer, focus=(primary,), confidence=1.0, evidence=("chosen by you",))
     if parent_name is not None and any(isinstance(scope.get(parent_name), list) for scope in scopes):
         catalog.insert(
             0,
@@ -178,6 +200,9 @@ def analyze_execution(
         else (None, [])
     )
 
+    if language == "cpp" and recursion_steps:
+        for index, step in enumerate(steps):
+            step["_frame_id"] = recursion_steps[index].get("current")
     usage = variable_usage(source, language, steps, scopes)
     loops = loop_jumps(steps, loop_ranges(source, language))
     inputs = input_values(source, language, steps)
@@ -189,6 +214,9 @@ def analyze_execution(
     sentinels: dict[str, set[Any]] = {}
     spells_infinity = bool(_INFINITY_SPELLINGS.search(source))
     for index, (step, scope) in enumerate(zip(steps, scopes)):
+        line = step.get("line")
+        step["_source_line"] = source_lines[line - 1] if isinstance(line, int) and 0 < line <= len(source_lines) else ""
+        step["_language"] = language
         step["usage"] = usage[index]
         step["loop"] = loops[index]
         step["inputs"] = inputs[index]
@@ -219,7 +247,10 @@ def analyze_execution(
                     segment_spec, segment_layout, scope, step, segment_paths[index], line_text, language
                 )
             else:
-                model = _view_model(view, profile, scope, step, recursion_state, language, extents)
+                if view["renderer"] in lenses.RENDERERS:
+                    model = lenses.view_model(view, scope, step, previous_scope, bindings=bindings)
+                else:
+                    model = _view_model(view, profile, scope, step, recursion_state, language, extents)
             model = _carry(view["id"], model, last_ready, step)
             _drop_input_readouts(model, input_names)
             _mark_writes(model, previous.get(view["id"]), scope, previous_scope)
@@ -232,7 +263,31 @@ def analyze_execution(
             step["visualization"] = views[catalog[0]["id"]]
 
     _orient_graphs(steps)
-    _show_line_effects(steps)
+    # Pair effects in the same live frame, including lines whose nested calls have returned.
+    frame_steps: dict[tuple[int, str, int | None], int] = {}
+    after_scopes: dict[int, dict[str, Any]] = {}
+    after_indices: dict[int, int] = {}
+    for index, step in enumerate(steps):
+        depth = int(step.get("depth", len(step.get("stack") or [])))
+        key = (depth, str(step.get("function")), step.get("_frame_id"))
+        for stale in [item for item in frame_steps if item[0] > depth or key[2] is not None and item[0] == depth and item[2] != key[2]]:
+            frame_steps.pop(stale)
+        if step.get("event") == "call":
+            frame_steps.pop(key, None)
+        if key in frame_steps:
+            after_scopes[frame_steps[key]] = scopes[index]
+            after_indices[frame_steps[key]] = index
+        frame_steps[key] = index
+    _show_line_effects(steps, after_indices)
+    for index, (step, scope) in enumerate(zip(steps, scopes)):
+        step["_after_scope"] = after_scopes.get(index)
+        models = [step["visualization"], *step["views"].values()]
+        for model in models:
+            lenses.enrich_model(model, step, scope, scopes[index - 1] if index else None, bindings=bindings)
+        step.pop("_source_line", None)
+        step.pop("_language", None)
+        step.pop("_after_scope", None)
+        step.pop("_frame_id", None)
 
     # The profile can name a renderer whose data never shows up (a 1D `dp` for a
     # "DP table"); Auto then falls back to the first view that draws something.
@@ -253,7 +308,40 @@ def analyze_execution(
             for step in steps:
                 step["visualization"] = step["views"][fallback]
 
+    selected = None
+    if manual_mode != "auto":
+        target_renderer = manual_renderers.get(manual_mode, manual_mode)
+        if manual_mode == "dp" and primary:
+            target_renderer = "grid" if any(_is_grid(scope.get(primary)) for scope in scopes) else "array"
+        target_variable = bindings.get("stack", primary) if manual_mode == "monotonic" else bindings.get("text", primary) if manual_mode == "string_match" else primary
+        selected = next((item for item in catalog if item["renderer"] == target_renderer
+                         and (not target_variable or item.get("variable") == target_variable)), None)
+    elif profile.kind in {"generic", "array_processing", "matrix_processing", "sorting"}:
+        selected = next((item for item in catalog if item.get("preferred")), None)
+    if selected is not None and not any(step["views"].get(selected["id"], {}).get("ready") for step in steps):
+        selected = None
+    if selected is not None:
+        for step in steps:
+            if selected["id"] in step["views"]:
+                step["visualization"] = step["views"][selected["id"]]
+        manual_names = {"dp": "Dynamic programming", "sorting": "Sorting", "graph": "Graph",
+                        "dsu": "Union-find", "segment_tree": "Segment tree"}
+        manual_kinds = {"dp": "dynamic_programming", "dsu": "union_find"}
+        profile = replace(profile, renderer=selected["renderer"],
+                          kind=manual_kinds.get(manual_mode, manual_mode) if manual_mode != "auto" else selected["renderer"],
+                          name=manual_names.get(manual_mode, selected.get("label", selected["renderer"].replace("_", " ").title())),
+                          evidence=("chosen by you",) if manual_mode != "auto" else ("algorithm operation pattern",))
+    elif manual_mode != "auto":
+        profile = inferred_profile
     result = profile.as_dict()
+    result["events"] = lenses.build_events(steps)
+    result["bindings"] = bindings
+    result["manual_applied"] = manual_mode != "auto" and selected is not None
+    result["binding_warnings"] = (
+        [f"Cannot apply {manual_mode} to {primary or 'the available variables'}; showing the automatic view. Check the variable pairing and source structure."]
+        if manual_mode != "auto" and selected is None else []
+    )
+    result["variables"] = sorted({name for scope in scopes for name in scope if not name.startswith("__")})
     result["views"] = catalog
     # What Auto actually draws (after any fallback), for the view picker's label.
     drawn = [step["visualization"].get("renderer") for step in steps if step["visualization"].get("ready")]
@@ -308,7 +396,7 @@ def _is_single_value(value: Any) -> bool:
     return isinstance(value, (int, float, str, bool)) and not isinstance(value, list)
 
 
-def _show_line_effects(steps: list[dict[str, Any]]) -> None:
+def _show_line_effects(steps: list[dict[str, Any]], after_indices: dict[int, int] | None = None) -> None:
     """Draw each step's views as they are once its highlighted line has run.
 
     A stop comes before its line runs, so the state recorded there misses what that line does:
@@ -319,7 +407,7 @@ def _show_line_effects(steps: list[dict[str, Any]]) -> None:
     """
     own = [(step["visualization"], step["views"]) for step in steps]
     for index, step in enumerate(steps):
-        after = index + 1
+        after = (after_indices or {}).get(index, index + 1) if step.get("event") == "line" else index + 1
         if after >= len(steps) or step.get("event") in {"exception", "stopped"}:
             continue
         mine_auto, mine_views = own[index]
@@ -332,7 +420,7 @@ def _show_line_effects(steps: list[dict[str, Any]]) -> None:
 
 
 def _after_line(mine: dict[str, Any], after: dict[str, Any], after_index: int) -> dict[str, Any]:
-    if mine.get("renderer") == "execution" or after.get("renderer") != mine.get("renderer"):
+    if mine.get("renderer") in {"execution", "recursion_tree", "call_tree"} or after.get("renderer") != mine.get("renderer"):
         return mine
     shown = {**after, "at_step": after_index}
     if mine.get("renderer") == "segment_tree":
@@ -743,7 +831,7 @@ def _mark_infinite(model: dict[str, Any], sentinels: dict[str, set[Any]], spells
     """
     if model.get("renderer") != "array" or not model.get("ready"):
         return
-    values = model.get("values") or []
+    values = model.get("captured_values") or model.get("values") or []
     known = sentinels.setdefault(str(model.get("name")), set())
     nonzero = [value for value in values if value != 0]
     if spells_infinity and len(nonzero) >= 2 and len(set(nonzero)) == 1 and _is_infinity(nonzero[0]):
@@ -1186,7 +1274,7 @@ def _decode_value(
     if type_name in {"list", "tuple", "set", "frozenset"}:
         items = [
             _decode_value(item, registry, seen)
-            for item in value.get("items", [])[:MAX_VISUAL_ITEMS]
+            for item in value.get("items", [])[:MAX_CAPTURE_ITEMS]
         ]
         unordered = type_name in {"set", "frozenset"} or value.get("class_name") in SET_CLASSES
         if unordered:
@@ -1198,7 +1286,7 @@ def _decode_value(
     if type_name == "dict":
         # A program's own object (`Node`): its fields, never a graph's adjacency dict.
         decoded: dict[Any, Any] = _ObjectFields() if value.get("class_name") not in (None, "dict") else {}
-        for entry in value.get("entries", [])[:MAX_VISUAL_ITEMS]:
+        for entry in value.get("entries", [])[:MAX_CAPTURE_ITEMS]:
             key = _decode_value(entry.get("key"), registry, seen)
             item = _decode_value(entry.get("value"), registry, seen)
             try:
@@ -1326,6 +1414,7 @@ def _grid_visualization(
     )
     if not row_count or not column_count:
         return {"renderer": "grid", "ready": False}
+    captured_rows = rows
     rows = [row[:column_count] for row in rows[:row_count]]
 
     visited_name, visited = _find_visited(scope, row_count, column_count, reached_rules)
@@ -1342,6 +1431,9 @@ def _grid_visualization(
         "name": grid_name,
         "uses": _unique_names([*names, visited_name, *active_names, frontier_name]),
         "rows": rows,
+        "captured_rows": captured_rows,
+        "full_height": full_height,
+        "full_width": full_width,
         "walls": [
             {"row": row, "column": column}
             for row, column in sorted(walls)
@@ -1526,7 +1618,10 @@ def _array_visualization(
             "ready": True,
             "name": array_name,
             "values": values,
+            "captured_values": numeric_values[:length][:MAX_CAPTURE_ITEMS],
+            "captured_length": min(length, MAX_CAPTURE_ITEMS),
             **({"labels": item_labels[: len(values)]} if item_labels is not None else {}),
+            **({"captured_labels": item_labels[:length][:MAX_CAPTURE_ITEMS]} if item_labels is not None else {}),
             "truncated": partial or length > len(values),
         }
         _mark_partial(visualization, value)
@@ -1536,7 +1631,7 @@ def _array_visualization(
 
 
 def _empty_sequence(renderer: str, name: str) -> dict[str, Any]:
-    return {"renderer": renderer, "ready": True, "name": name, "values": [], "truncated": False, "markers": [], "uses": [name]}
+    return {"renderer": renderer, "ready": True, "name": name, "values": [], "captured_values": [], "captured_length": 0, "truncated": False, "markers": [], "uses": [name]}
 
 
 def _mark_partial(visualization: dict[str, Any], value: Any) -> None:
@@ -1570,6 +1665,8 @@ def _cells_visualization(
         "ready": True,
         "name": name,
         "values": [_display_value(item, language) for item in items],
+        "captured_values": [_display_value(item, language) for item in value[:length][:MAX_CAPTURE_ITEMS]],
+        "captured_length": min(length, MAX_CAPTURE_ITEMS),
         "truncated": isinstance(value, _PartialItems) or length > len(items),
     }
     _mark_partial(visualization, value)
@@ -1625,7 +1722,7 @@ def _annotate_indexes(
             continue
         if _is_index(index) and 0 <= index < length:
             markers.append({"index": index, "role": role, "label": label})
-        elif _is_index(index) and length <= index < visualization.get("length", length):
+        elif _is_index(index) and length <= index < visualization.get("length", visualization.get("captured_length", length)):
             beyond.append({"index": index, "label": label})
     visualization["markers"] = markers
     if beyond:
@@ -1811,6 +1908,9 @@ def _graph_visualization(
             ),
             "nodes": sorted(str(node) for node in node_values),
             "edges": edges[:100],
+            "edges_total": len(edges),
+            "edges_truncated": len(edges) > 100,
+            "capture_truncated": isinstance(value, _PartialItems) or any(isinstance(row, _PartialItems) for row in value if isinstance(value, list)),
             "visited": visited,
             "current": current,
             "frontier": (

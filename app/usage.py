@@ -38,9 +38,9 @@ def variable_usage(
     noise = _CPP_NOISE if language == "cpp" else _PYTHON_NOISE
     names_by_line: dict[int, set[str]] = {}
     # The last scope seen for each live frame, keyed by stack depth and function name.
-    frame_scopes: dict[tuple[int, str], dict[str, Any]] = {}
+    frame_scopes: dict[tuple[int, str, int | None], dict[str, Any]] = {}
     # ...and the index of the step it came from, which receives the effect of its line.
-    frame_steps: dict[tuple[int, str], int] = {}
+    frame_steps: dict[tuple[int, str, int | None], int] = {}
     # (function, name) of every local and ("", name) of every global seen so far.
     seen: set[tuple[str, str]] = set()
     usage: list[dict[str, Any]] = []
@@ -53,9 +53,9 @@ def variable_usage(
         on_line = [name for name in scope if name in names_by_line[line]]
 
         depth = int(step.get("depth", len(step.get("stack") or [])))
-        key = (depth, str(step.get("function")))
+        key = (depth, str(step.get("function")), step.get("_frame_id"))
         # A frame deeper than this one has returned; a call event starts a fresh frame.
-        for stale in [frame for frame in frame_scopes if frame[0] > depth]:
+        for stale in [frame for frame in frame_scopes if frame[0] > depth or key[2] is not None and frame[0] == depth and frame[2] != key[2]]:
             del frame_scopes[stale]
             frame_steps.pop(stale, None)
         if step.get("event") == "call":

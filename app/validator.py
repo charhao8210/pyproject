@@ -6,6 +6,33 @@ from dataclasses import dataclass
 
 MAX_SOURCE_LENGTH = 50_000
 
+# The runtime returns restricted namespaces containing only these public members.
+# Keeping validation and execution on one allowlist prevents importing a module's
+# implementation helpers (or its own imported modules) through a from-import.
+ALGORITHM_MODULE_MEMBERS: dict[str, frozenset[str]] = {
+    "sys": frozenset({"stdin"}),
+    "heapq": frozenset({
+        "heapify", "heappop", "heappush", "heappushpop", "heapreplace",
+        "merge", "nlargest", "nsmallest", "heapify_max", "heappop_max",
+        "heappush_max", "heappushpop_max", "heapreplace_max",
+    }),
+    "bisect": frozenset({
+        "bisect", "bisect_left", "bisect_right", "insort", "insort_left", "insort_right",
+    }),
+    "collections": frozenset({"deque", "defaultdict", "Counter"}),
+    "math": frozenset({
+        "acos", "acosh", "asin", "asinh", "atan", "atan2", "atanh", "cbrt",
+        "ceil", "comb", "copysign", "cos", "cosh", "degrees", "dist", "e",
+        "erf", "erfc", "exp", "exp2", "expm1", "fabs", "factorial", "floor",
+        "fmod", "frexp", "fsum", "gamma", "gcd", "hypot", "inf", "isclose",
+        "isfinite", "isinf", "isnan", "isqrt", "lcm", "ldexp", "lgamma",
+        "log", "log10", "log1p", "log2", "modf", "nan", "nextafter", "perm",
+        "pi", "pow", "prod", "radians", "remainder", "sin", "sinh", "sqrt",
+        "sumprod", "tan", "tanh", "tau", "trunc", "ulp",
+    }),
+}
+SAFE_IMPORT_MESSAGE = "Available algorithm modules: sys, heapq, bisect, collections and math."
+
 
 @dataclass(frozen=True)
 class ValidationIssue:
@@ -45,15 +72,14 @@ class _SafetyVisitor(ast.NodeVisitor):
         )
 
     def visit_Import(self, node: ast.Import) -> None:
-        if any(alias.name != "sys" for alias in node.names):
-            self._reject(node, "Only the sys module is available for standard input.")
+        if any(alias.name not in ALGORITHM_MODULE_MEMBERS for alias in node.names):
+            self._reject(node, SAFE_IMPORT_MESSAGE)
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
-        allowed = node.module == "sys" and all(
-            alias.name == "stdin" for alias in node.names
-        )
+        allowed_members = ALGORITHM_MODULE_MEMBERS.get(node.module or "", frozenset())
+        allowed = node.level == 0 and bool(allowed_members) and all(alias.name in allowed_members for alias in node.names)
         if not allowed:
-            self._reject(node, "Only 'from sys import stdin' is allowed.")
+            self._reject(node, "Only listed public members of algorithm modules may be imported. " + SAFE_IMPORT_MESSAGE)
 
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
         self._reject(node, "Async code is not supported in the MVP.")

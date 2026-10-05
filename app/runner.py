@@ -34,9 +34,17 @@ def run_debugger(
     timeout_seconds: float | None = None,
     max_steps: int = DEFAULT_MAX_STEPS,
     extra_views: Iterable[str] = (),
+    bindings: dict[str, str] | None = None,
+    capture_items: int = 50,
+    capture_depth: int = 4,
 ) -> dict[str, Any]:
+    if not 10 <= capture_items <= 500 or not 2 <= capture_depth <= 8:
+        raise ValueError("Capture items must be 10–500 and depth 2–8")
     if timeout_seconds is None:
-        timeout_seconds = CPP_TIMEOUT_SECONDS if language == "cpp" else DEFAULT_TIMEOUT_SECONDS
+        # Capturing larger containers costs time even for a short program. Keep the
+        # ordinary three-second budget, with a bounded allowance for larger snapshots.
+        capture_factor = max(1.0, capture_items / 50) * max(1.0, capture_depth / 4)
+        timeout_seconds = CPP_TIMEOUT_SECONDS if language == "cpp" else min(15.0, DEFAULT_TIMEOUT_SECONDS * capture_factor)
     if language == "cpp":
         from .cpp_runner import CppExecutionTimeoutError, run_cpp_debugger
 
@@ -47,6 +55,8 @@ def run_debugger(
                 timeout_seconds=timeout_seconds,
                 max_steps=max_steps,
                 extra_views=extra_views,
+                bindings=bindings,
+                capture_items=capture_items,
             )
         except CppExecutionTimeoutError as error:
             raise ExecutionTimeoutError(str(error)) from error
@@ -78,6 +88,8 @@ def run_debugger(
                 "code": source,
                 "stdin": stdin_text,
                 "max_steps": max_steps,
+                "capture_items": capture_items,
+                "capture_depth": capture_depth,
                 "trace_file": trace_path.name,
             },
             ensure_ascii=False,
@@ -118,7 +130,7 @@ def run_debugger(
 
     result["language"] = "python"
     _mark_exception_origin(result["steps"])
-    result["algorithm"] = analyze_execution(source, result["steps"], language="python", extra_views=extra_views)
+    result["algorithm"] = analyze_execution(source, result["steps"], language="python", extra_views=extra_views, bindings=bindings)
     return result
 
 

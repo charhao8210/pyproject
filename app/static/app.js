@@ -48,6 +48,12 @@ const state = {
     lastRun: null,
     extraViews: [],
     loadingView: null,
+    bindings: {},
+    focus: true,
+    follow: true,
+    stepMode: "line",
+    eventIndexes: {},
+    examples: [],
     recursionPositions: new Map(),
     callChainPositions: new Map(),
     playback: {
@@ -71,6 +77,19 @@ const RENDERER_LABELS = {
     recursion_tree: "Recursion tree",
     call_tree: "Call chain",
     execution: "Current line",
+    heap: "Heap / Priority queue",
+    window: "Sliding window",
+    monotonic: "Monotonic stack / deque",
+    fenwick: "Fenwick / BIT",
+    string_match: "String matching / KMP",
+    trie: "Trie",
+};
+
+const COMPACT_RENDERER_LABELS = {
+    grid: "表格", array: "長條圖", cells: "格子", graph: "圖",
+    dsu: "並查集", segment_tree: "線段樹", recursion_tree: "遞迴樹",
+    call_tree: "呼叫鏈", execution: "執行", heap: "堆積", window: "滑動視窗",
+    monotonic: "單調堆疊", fenwick: "Fenwick", string_match: "字串比對", trie: "Trie",
 };
 
 const STORAGE_PREFIX = "code-visual-debugger";
@@ -114,6 +133,7 @@ const elements = {
     stepLabel: document.querySelector("#step-label"),
     eventLabel: document.querySelector("#event-label"),
     algorithmName: document.querySelector("#algorithm-name"),
+    algorithmDetectedName: document.querySelector("#algorithm-detected-name"),
     algorithmConfidence: document.querySelector("#algorithm-confidence"),
     algorithmEvidence: document.querySelector("#algorithm-evidence"),
     algorithmView: document.querySelector("#algorithm-view"),
@@ -124,6 +144,19 @@ const elements = {
     previousButton: document.querySelector("#previous-button"),
     nextButton: document.querySelector("#next-button"),
     loopEndButton: document.querySelector("#loop-end-button"),
+    focusToggle: document.querySelector("#focus-toggle"),
+    followToggle: document.querySelector("#follow-toggle"),
+    visualSettings: document.querySelector("#visual-settings"),
+    visualScaleInfo: document.querySelector("#visual-scale-info"),
+    bindingMode: document.querySelector("#binding-mode"),
+    bindingFields: document.querySelector("#binding-fields"),
+    bindingOptions: document.querySelector("#binding-options"),
+    applyBindings: document.querySelector("#apply-bindings"),
+    stepMode: document.querySelector("#step-mode"),
+    callEndButton: document.querySelector("#call-end-button"),
+    exampleSelect: document.querySelector("#example-select"),
+    captureItems: document.querySelector("#capture-items"),
+    captureDepth: document.querySelector("#capture-depth"),
 };
 
 const containerTypes = new Set(["list", "tuple", "dict", "set", "frozenset", "object"]);
@@ -132,6 +165,7 @@ const SVG_NS = "http://www.w3.org/2000/svg";
 elements.runButton.addEventListener("click", runCode);
 elements.editButton.addEventListener("click", showEditor);
 elements.languageSelect.addEventListener("change", changeLanguage);
+elements.languageSelect.addEventListener("change", () => { elements.exampleSelect.value = ""; });
 elements.themeButton.addEventListener("click", () => setTheme(currentTheme() === "dark" ? "light" : "dark"));
 elements.viewSelect.addEventListener("change", (event) => chooseView(event.target.value, null));
 elements.viewVariableSelect.addEventListener("change", (event) => chooseView(state.view.renderer, event.target.value));
@@ -139,10 +173,56 @@ elements.playButton.addEventListener("click", togglePlayback);
 elements.speedSelect.addEventListener("change", (event) => setPlaybackSpeed(Number(event.target.value)));
 // Skip the innermost loop around the current line (`step.loop` comes from the backend).
 elements.loopStartButton.addEventListener("click", () => jumpOutOfLoop("before"));
-elements.previousButton.addEventListener("click", () => stepManually(state.currentStep - 1));
-elements.nextButton.addEventListener("click", () => stepManually(state.currentStep + 1));
+elements.previousButton.addEventListener("click", () => stepManually(navigationTarget(-1)));
+elements.nextButton.addEventListener("click", () => stepManually(navigationTarget(1)));
 elements.loopEndButton.addEventListener("click", () => jumpOutOfLoop("after"));
 elements.slider.addEventListener("input", (event) => stepManually(Number(event.target.value)));
+elements.focusToggle.addEventListener("change", () => {
+    state.focus = elements.focusToggle.checked;
+    writePreference("focus", state.focus);
+    if (state.result?.steps.length) renderStep();
+});
+elements.followToggle.addEventListener("change", () => {
+    state.follow = elements.followToggle.checked;
+    writePreference("follow", state.follow);
+    if (state.result?.steps.length) renderStep();
+});
+elements.stepMode.addEventListener("change", () => {
+    state.stepMode = elements.stepMode.value;
+    writePreference("step-mode", state.stepMode);
+    updateTimelineButtons();
+});
+elements.bindingMode.addEventListener("change", configureBindings);
+elements.applyBindings.addEventListener("click", () => {
+    state.bindings = {mode: elements.bindingMode.value};
+    elements.bindingFields.querySelectorAll("select").forEach((select) => {
+        if (select.value) state.bindings[select.dataset.role] = select.value;
+    });
+    elements.bindingOptions.querySelectorAll("select").forEach((select) => {
+        if (select.value) state.bindings[select.dataset.role] = select.value;
+    });
+    runCode();
+});
+elements.callEndButton.addEventListener("click", () => {
+    const target = currentCallEnd();
+    if (target !== null) stepManually(target);
+});
+elements.exampleSelect.addEventListener("change", () => {
+    const example = state.examples.find((item) => item.id === elements.exampleSelect.value);
+    if (!example) return;
+    stopPlayback();
+    if (example.language !== state.language) changeLanguage({target: {value: example.language}});
+    resetTraceView();
+    elements.editor.value = example.code;
+    elements.stdinEditor.value = example.stdin || "";
+    state.bindings = {};
+    elements.bindingMode.value = "auto";
+    state.view = {renderer: "auto", variable: null};
+    showEditor();
+    renderEditorHighlight();
+    updateStdinCount();
+    saveDrafts();
+});
 elements.stdinEditor.addEventListener("input", () => {
     updateStdinCount();
     saveDrafts();
@@ -157,6 +237,7 @@ elements.editor.addEventListener("keydown", (event) => {
     renderEditorHighlight();
 });
 elements.editor.addEventListener("input", () => {
+    elements.exampleSelect.value = "";
     // Line numbers in an old error no longer match once the code is edited.
     if (state.editorErrors?.length) state.editorErrors = [];
     renderEditorHighlight();
@@ -183,16 +264,29 @@ elements.rowResizers.forEach((resizer) => {
 });
 
 document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && elements.visualSettings.open) {
+        event.preventDefault();
+        elements.visualSettings.open = false;
+        elements.visualSettings.querySelector(":scope > summary").focus();
+        return;
+    }
     if (!state.result || [elements.editor, elements.stdinEditor].includes(document.activeElement)) return;
+    if (event.target.closest("select, input, textarea, summary, a, [role=button], [contenteditable=true]")) return;
     if (event.key === "ArrowLeft") {
         event.preventDefault();
-        stepManually(state.currentStep - 1);
+        stepManually(navigationTarget(-1));
     } else if (event.key === "ArrowRight") {
         event.preventDefault();
-        stepManually(state.currentStep + 1);
+        stepManually(navigationTarget(1));
     } else if (event.key === " " && !event.target.closest("button, select, input")) {
         event.preventDefault();
         togglePlayback();
+    }
+});
+
+document.addEventListener("pointerdown", (event) => {
+    if (elements.visualSettings.open && !elements.visualSettings.contains(event.target)) {
+        elements.visualSettings.open = false;
     }
 });
 
@@ -204,9 +298,11 @@ const panelResizeObserver = new ResizeObserver(() => {
         const step = state.result?.steps[state.currentStep];
         if (!step) return;
         renderAlgorithm(currentVisualization(step));
+        scrollCurrentSourceLine();
     });
 });
 panelResizeObserver.observe(elements.algorithmPanel);
+panelResizeObserver.observe(elements.sourceViewer);
 
 updateStdinCount();
 renderEditorHighlight();
@@ -216,6 +312,74 @@ setupPanelToggles();
 state.drafts.python = elements.editor.value;
 state.stdinDrafts.python = elements.stdinEditor.value;
 restoreDrafts();
+state.focus = readPreference("focus", true) !== false;
+state.follow = readPreference("follow", true) !== false;
+elements.focusToggle.checked = state.focus;
+elements.followToggle.checked = state.follow;
+const savedStepMode = readPreference("step-mode", "line");
+state.stepMode = ["line", "event", "call", "return", "change"].includes(savedStepMode) ? savedStepMode : "line";
+elements.stepMode.value = state.stepMode;
+loadExamples();
+
+const BINDING_ROLES = {
+    primary: "主要資料", left: "左界", right: "右界", total: "總和 / 統計",
+    frontier: "佇列 / 優先佇列", distance: "距離 / 層次", indegree: "入度", output: "拓樸輸出", parent: "父節點", lazy: "Lazy tag",
+    index: "目前索引 / 節點", row: "列索引", column: "欄索引", stack: "Stack / deque",
+    text: "文字", pattern: "模式字串", prefix: "Prefix table", query_left: "查詢左界", query_right: "查詢右界",
+    pivot: "Pivot 值 / 索引", temporary: "Merge 暫存資料",
+};
+configureBindings();
+
+function configureBindings() {
+    const mode = elements.bindingMode.value;
+    const roleSets = {
+        auto: [], dp: ["primary", "row", "column", "index"],
+        graph: ["primary", "index", "frontier", "distance", "indegree", "output", "parent"],
+        sorting: ["primary", "left", "right", "index", "pivot", "temporary"], dsu: ["primary", "index", "parent"],
+        segment_tree: ["primary", "index", "lazy", "query_left", "query_right"],
+        heap: ["primary", "index"], window: ["primary", "left", "right", "total"],
+        monotonic: ["primary", "stack", "index"], fenwick: ["primary", "index", "total"],
+        string_match: ["text", "pattern", "prefix", "index", "column"], trie: ["primary", "text", "index"],
+    };
+    const labels = BINDING_ROLES;
+    const variables = state.result?.algorithm?.variables || [];
+    elements.bindingFields.replaceChildren(...(roleSets[mode] || ["primary"]).map((role) => {
+        const label = document.createElement("label");
+        const roleLabel = mode === "string_match" && role === "column" ? "模式字串索引 j" : labels[role] || "主要資料";
+        label.append(roleLabel);
+        const select = document.createElement("select");
+        select.dataset.role = role;
+        select.setAttribute("aria-label", roleLabel);
+        select.replaceChildren(new Option("自動", ""), ...variables.map((name) => new Option(name, name)));
+        select.value = state.bindings[role] || "";
+        label.append(select);
+        return label;
+    }));
+    const options = mode === "heap" ? [{role: "heap_order", label: "Heap 順序", values: [["", "自動辨識"], ["min", "Min heap"], ["max", "Max heap"]]}]
+        : ["window", "sorting"].includes(mode) ? [{role: "right_exclusive", label: "右界定義", values: [["", "自動辨識 / 尚未指定"], ["false", "包含右界 [l, r]"], ["true", "不包含右界 [l, r)"]]}] : [];
+    elements.bindingOptions.replaceChildren(...options.map((option) => {
+        const label = document.createElement("label");
+        label.append(option.label);
+        const select = document.createElement("select");
+        select.dataset.role = option.role;
+        select.setAttribute("aria-label", option.label);
+        select.replaceChildren(...option.values.map(([value, text]) => new Option(text, value)));
+        select.value = state.bindings[option.role] || "";
+        label.append(select);
+        return label;
+    }));
+    elements.applyBindings.disabled = !state.result?.steps.length;
+}
+
+async function loadExamples() {
+    try {
+        const response = await fetch("/api/examples");
+        if (!response.ok) return;
+        state.examples = await response.json();
+        elements.exampleSelect.replaceChildren(new Option("選擇範例…", ""),
+            ...state.examples.map((item) => new Option(`${item.title} · ${item.language}`, item.id)));
+    } catch (_error) { /* Examples are optional; the editor remains usable offline. */ }
+}
 
 // Hovering (or focusing) anything with `data-term` shows what that word means (terms.js).
 const hoverTip = document.createElement("div");
@@ -276,6 +440,9 @@ function changeLanguage(event) {
     state.drafts[state.language] = elements.editor.value;
     state.stdinDrafts[state.language] = elements.stdinEditor.value;
     state.language = nextLanguage;
+    elements.languageSelect.value = nextLanguage;
+    state.bindings = {};
+    elements.bindingMode.value = "auto";
     elements.editor.value = state.drafts[nextLanguage];
     elements.stdinEditor.value = state.stdinDrafts[nextLanguage];
     saveDrafts();
@@ -290,28 +457,33 @@ function resetTraceView() {
     stopPlayback();
     state.result = null;
     state.currentStep = 0;
+    state.eventIndexes = {};
+    elements.applyBindings.disabled = true;
     elements.slider.min = "0";
     elements.slider.max = "0";
     elements.slider.value = "0";
     elements.slider.disabled = true;
     updateTimelineButtons();
-    elements.location.textContent = "Not running";
+    elements.location.textContent = "未執行";
     elements.functionName.textContent = "—";
-    elements.stepLabel.textContent = "No trace";
-    elements.eventLabel.textContent = "—";
+    elements.stepLabel.textContent = "未執行";
+    elements.eventLabel.textContent = "";
+    elements.eventLabel.hidden = true;
     elements.variables.className = "panel-body empty-state";
-    elements.variables.textContent = "Run the program to inspect variables.";
-    elements.stdout.innerHTML = '<span class="output-placeholder">Program output appears here.</span>';
-    elements.algorithmName.textContent = "Algorithm";
-    elements.algorithmConfidence.textContent = "Not analyzed";
-    elements.algorithmEvidence.textContent = "Run code to detect its structure";
+    elements.variables.textContent = "執行後顯示變數";
+    elements.stdout.innerHTML = '<span class="output-placeholder">尚無輸出</span>';
+    elements.algorithmName.textContent = "資料";
+    elements.algorithmDetectedName.textContent = "尚未辨識";
+    elements.algorithmConfidence.textContent = "未分析";
+    elements.algorithmEvidence.textContent = "執行後辨識結構";
+    elements.visualScaleInfo.hidden = true;
     elements.algorithmView.className = "algorithm-canvas empty-state";
-    elements.algorithmView.textContent = "Run the program to see its data structure drawn here.";
+    elements.algorithmView.textContent = "執行後顯示資料";
     elements.algorithmInputs.replaceChildren();
     elements.algorithmInputs.hidden = true;
     configureViewSelects();
     setMessage("");
-    setStatus("idle", "Ready");
+    setStatus("idle", "就緒");
 }
 
 function availableViews() {
@@ -335,10 +507,10 @@ function currentVisualization(step) {
 function configureViewSelects() {
     const renderers = [...new Set(availableViews().map((view) => view.renderer))];
     const autoRenderer = state.result?.algorithm?.auto_renderer || state.result?.algorithm?.renderer;
-    const autoLabel = autoRenderer ? `Auto (${RENDERER_LABELS[autoRenderer] || autoRenderer})` : "Auto";
+    const autoLabel = autoRenderer ? `自動 · ${COMPACT_RENDERER_LABELS[autoRenderer] || RENDERER_LABELS[autoRenderer] || autoRenderer}` : "自動";
     elements.viewSelect.replaceChildren(
         new Option(autoLabel, "auto"),
-        ...renderers.map((renderer) => new Option(RENDERER_LABELS[renderer] || renderer, renderer)),
+        ...renderers.map((renderer) => new Option(COMPACT_RENDERER_LABELS[renderer] || RENDERER_LABELS[renderer] || renderer, renderer)),
     );
     elements.viewSelect.disabled = !renderers.length;
     updateViewSelects();
@@ -353,7 +525,7 @@ function updateViewSelects() {
     // Variables past the precomputed ones are still listed; picking one runs the program again.
     const pending = new Set(availableViews().filter((item) => item.renderer === view?.renderer && item.pending).map((item) => item.variable));
     elements.viewVariableSelect.replaceChildren(
-        ...variables.map((name) => new Option(pending.has(name) ? `${name} (runs again)` : name, name)),
+        ...variables.map((name) => new Option(pending.has(name) ? `${name}（重跑）` : name, name)),
     );
     elements.viewVariableSelect.hidden = !variables.length;
     if (view?.variable) elements.viewVariableSelect.value = view.variable;
@@ -586,7 +758,9 @@ function currentTheme() {
 
 function setTheme(theme, persist = true) {
     document.documentElement.dataset.theme = theme;
-    elements.themeButton.textContent = theme === "dark" ? "Light theme" : "Dark theme";
+    elements.themeButton.textContent = theme === "dark" ? "☀" : "☾";
+    elements.themeButton.title = theme === "dark" ? "切換淺色主題" : "切換深色主題";
+    elements.themeButton.setAttribute("aria-label", elements.themeButton.title);
     // The theme is read before app.js loads, so it is stored as a plain string.
     if (persist) {
         try {
@@ -617,7 +791,11 @@ function setPanelExpanded(panel, expanded) {
     const button = panel.querySelector(".panel-toggle");
     document.getElementById(button.getAttribute("aria-controls")).hidden = !expanded;
     panel.classList.toggle("is-collapsed", !expanded);
-    button.textContent = expanded ? "Hide" : "Show";
+    button.textContent = expanded ? "▾" : "▸";
+    const panelName = {source: "程式碼", stdin: "輸入", algorithm: "資料", variables: "變數", stdout: "輸出"}[panel.dataset.panel];
+    button.title = `${expanded ? "收合" : "展開"}${panelName}`;
+    button.setAttribute("aria-label", button.title);
+    if (!expanded && panel === elements.algorithmPanel) elements.visualSettings.open = false;
     button.setAttribute("aria-expanded", String(expanded));
 
     const columnCollapsed = (column) => [...column.querySelectorAll("[data-panel]")]
@@ -654,7 +832,7 @@ function scheduleNextPlaybackStep() {
     // Each tick reads the current speed, so changing it mid-playback applies on the next step.
     const delay = 1000 / (PLAYBACK_STEPS_PER_SECOND * state.playback.speed);
     state.playback.timer = window.setTimeout(() => {
-        goToStep(state.currentStep + 1);
+        goToStep(navigationTarget(1));
         if (state.currentStep >= state.result.steps.length - 1) stopPlayback();
         else scheduleNextPlaybackStep();
     }, delay);
@@ -670,7 +848,7 @@ function updatePlayButton() {
     const playing = Boolean(state.playback.timer);
     elements.playButton.setAttribute("aria-pressed", String(playing));
     elements.playButton.querySelector(".play-icon").textContent = playing ? "❚❚" : "▶";
-    elements.playButton.querySelector(".play-label").textContent = playing ? "Pause" : "Play";
+    elements.playButton.querySelector(".play-label").textContent = playing ? "暫停" : "播放";
 }
 
 function stepManually(index) {
@@ -679,22 +857,27 @@ function stepManually(index) {
 }
 
 async function runCode() {
+    if (elements.runButton.disabled) return;
     const code = elements.editor.value;
     const stdin = elements.stdinEditor.value;
+    const capture_items = Number(elements.captureItems.value);
+    const capture_depth = Number(elements.captureDepth.value);
     stopPlayback();
     setMessage("");
     setEditorErrors([]);
-    setStatus("running", "Running");
+    setStatus("running", "執行中");
     elements.runButton.disabled = true;
     elements.languageSelect.disabled = true;
+    elements.exampleSelect.disabled = true;
+    elements.applyBindings.disabled = true;
 
     try {
         const response = await fetch("/api/debug", {
             method: "POST",
             headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({code, stdin, language: state.language}),
+            body: JSON.stringify({code, stdin, language: state.language, bindings: state.bindings, capture_items, capture_depth}),
         });
-        state.lastRun = {code, stdin, language: state.language};
+        state.lastRun = {code, stdin, language: state.language, bindings: state.bindings, capture_items, capture_depth};
         state.extraViews = [];
         const payload = await response.json();
         if (!response.ok) {
@@ -715,7 +898,9 @@ async function runCode() {
         state.callChainPositions.clear();
         indexObjects(payload.steps);
         renderAlgorithmProfile(payload.algorithm);
+        if (payload.algorithm?.binding_warnings?.length) setMessage(payload.algorithm.binding_warnings.join("\n"));
         configureViewSelects();
+        configureBindings();
         showViewer();
         configureTimeline();
 
@@ -726,20 +911,22 @@ async function runCode() {
         }
 
         if (payload.status === "completed") {
-            setStatus("success", `${payload.steps.length} steps`);
+            setStatus("success", "完成");
         } else if (payload.status === "exception") {
             setStatus("error", payload.error?.type || "Exception");
         } else if (payload.status === "timeout") {
-            setStatus("error", "TLE · trace saved");
+            setStatus("error", "TLE · 已保留步驟");
         } else {
-            setStatus("error", "TLE · step limit");
+            setStatus("error", "TLE · 步數上限");
         }
     } catch (error) {
-        setStatus("error", "Cannot run");
+        setStatus("error", "無法執行");
         setMessage(error instanceof Error ? error.message : String(error));
     } finally {
         elements.runButton.disabled = false;
         elements.languageSelect.disabled = false;
+        elements.exampleSelect.disabled = false;
+        elements.applyBindings.disabled = !state.result;
     }
 }
 
@@ -801,7 +988,50 @@ function configureTimeline() {
     elements.slider.max = String(lastIndex);
     elements.slider.value = String(state.currentStep);
     elements.slider.disabled = state.result.steps.length === 0;
+    buildNavigationIndexes();
     updateTimelineButtons();
+}
+
+function buildNavigationIndexes() {
+    const steps = state.result?.steps || [];
+    const indexes = {event: new Set(), call: new Set(), return: new Set(), change: new Set()};
+    steps.forEach((step, index) => {
+        const depth = step.depth ?? step.stack?.length ?? 0;
+        const previousDepth = index ? (steps[index - 1].depth ?? steps[index - 1].stack?.length ?? 0) : depth;
+        if (step.event === "call" || depth > previousDepth) indexes.call.add(index);
+        if (step.event === "return" || depth < previousDepth) indexes.return.add(index);
+        const usage = step.usage || {};
+        if (Object.keys(usage.next || {}).length || Object.keys(usage.cells || {}).length || Object.keys(usage.appearing || {}).length) indexes.change.add(index);
+        if (["exception", "stopped"].includes(step.event)) indexes.event.add(index);
+    });
+    for (const event of state.result?.algorithm?.events || []) {
+        const index = event.index ?? event.step;
+        if (Number.isInteger(index) && index >= 0 && index < steps.length) indexes.event.add(index);
+    }
+    for (const kind of ["call", "return", "change"]) indexes[kind].forEach((index) => indexes.event.add(index));
+    for (const kind of Object.keys(indexes)) {
+        if (steps.length) { indexes[kind].add(0); indexes[kind].add(steps.length - 1); }
+        indexes[kind] = [...indexes[kind]].sort((a, b) => a - b);
+    }
+    state.eventIndexes = indexes;
+}
+
+function navigationTarget(direction) {
+    const last = Math.max(0, (state.result?.steps.length || 1) - 1);
+    if (state.stepMode === "line") return Math.max(0, Math.min(last, state.currentStep + direction));
+    const indexes = state.eventIndexes[state.stepMode] || [];
+    return direction > 0
+        ? indexes.find((index) => index > state.currentStep) ?? last
+        : indexes.findLast((index) => index < state.currentStep) ?? 0;
+}
+
+function currentCallEnd() {
+    const step = state.result?.steps[state.currentStep];
+    const id = step?.views?.recursion_tree?.current;
+    const node = state.result?.algorithm?.recursion_tree?.nodes?.[id];
+    if (!node || node.parent == null || node.end_step == null) return null;
+    const target = Math.min(node.end_step + 1, state.result.steps.length - 1);
+    return target > state.currentStep ? target : null;
 }
 
 function goToStep(index) {
@@ -823,10 +1053,12 @@ function renderStep() {
     renderRuntimeMessage(step);
     renderAlgorithm(visualization);
 
-    elements.location.textContent = `Line ${step.line}`;
+    elements.location.textContent = `L${step.line}`;
     elements.functionName.textContent = step.function;
-    elements.stepLabel.textContent = `Step ${state.currentStep + 1} / ${state.result.steps.length}`;
-    elements.eventLabel.textContent = step.event;
+    elements.stepLabel.textContent = `${state.currentStep + 1} / ${state.result.steps.length}`;
+    elements.stepLabel.setAttribute("aria-label", `第 ${state.currentStep + 1} 步，共 ${state.result.steps.length} 步`);
+    elements.eventLabel.textContent = {call: "呼叫", return: "返回", exception: "例外", stopped: "停止"}[step.event] || "";
+    elements.eventLabel.hidden = !elements.eventLabel.textContent;
     elements.eventLabel.dataset.term = step.event;
     elements.slider.value = String(state.currentStep);
     updateTimelineButtons();
@@ -843,6 +1075,8 @@ function updateTimelineButtons() {
     elements.nextButton.disabled = !hasSteps || atEnd;
     elements.loopEndButton.disabled = loop?.after == null || loop.after === state.currentStep;
     elements.playButton.disabled = !hasSteps;
+    elements.callEndButton.disabled = currentCallEnd() === null;
+    elements.stepMode.disabled = !hasSteps;
 }
 
 function jumpOutOfLoop(direction) {
@@ -888,6 +1122,7 @@ function renderSource(currentLine, problem = null) {
 }
 
 function scrollCurrentSourceLine() {
+    if (!elements.sourceViewer.clientHeight) return;
     const currentLine = elements.sourceViewer.querySelector(".source-line.current");
     if (!currentLine) return;
 
@@ -915,7 +1150,7 @@ function renderInputs(step, visualization) {
     // On the line that reads a value (`cin >> n`) it already shows, blue, with the value it gets.
     const appearing = step.usage?.appearing || {};
     const shown = (step.inputs || [])
-        .filter((entry) => !drawn.has(entry.name) && (entry.read || Object.hasOwn(appearing, entry.name)))
+        .filter((entry) => !drawn.has(entry.name) && !isDisplayedArraySize(entry.name, entry, visualization) && (entry.read || Object.hasOwn(appearing, entry.name)))
         .map((entry) => (entry.read ? [entry, false] : [{name: entry.name, ...appearing[entry.name].value}, true]));
     const onLine = new Set(step.usage?.line || []);
     elements.algorithmInputs.replaceChildren(...shown.map(([entry, isNew]) => {
@@ -925,6 +1160,17 @@ function renderInputs(step, visualization) {
         return item;
     }));
     elements.algorithmInputs.hidden = !shown.length;
+}
+
+// Only fold conventional size inputs when the current array actually displays that size.
+// Search targets, bounds and inputs for other renderer types stay visible.
+function isDisplayedArraySize(name, value, view) {
+    if (!view?.ready || !["array", "cells"].includes(view.renderer)) return false;
+    if (!/^(n|size|length|count)$/.test(name)) return false;
+    const length = view.length ?? view.total_length ?? view.captured_length ?? view.values?.length;
+    const source = state.result?.source || "";
+    const isLoopBound = new RegExp(`(?:<\\s*${name}\\b|range\\(\\s*${name}\\s*\\))`).test(source);
+    return isLoopBound && Number.isInteger(length) && Number(numberText(value)) === length;
 }
 
 function renderVariables(step, visualization) {
@@ -948,8 +1194,8 @@ function renderVariables(step, visualization) {
     if (!entries.length) {
         elements.variables.classList.add("empty-state");
         elements.variables.textContent = hidden.size
-            ? "Every variable at this step is drawn in the algorithm view."
-            : "No variables at this step.";
+            ? "變數已顯示在圖中"
+            : "此步尚無變數";
         return;
     }
 
@@ -1545,7 +1791,7 @@ function renderOutput(stdout) {
     } else {
         const placeholder = document.createElement("span");
         placeholder.className = "output-placeholder";
-        placeholder.textContent = "No output yet.";
+        placeholder.textContent = "尚無輸出";
         elements.stdout.append(placeholder);
     }
 }
@@ -1575,28 +1821,51 @@ function renderAlgorithmProfile(profile) {
         confidence: 0,
         evidence: [],
     };
-    elements.algorithmName.textContent = algorithm.name;
+    elements.algorithmDetectedName.textContent = algorithm.name;
     // The name is a guess from code patterns; its score is a ranking, not a probability, so no
     // percentage is shown as if it were one.
-    elements.algorithmConfidence.textContent = "guessed from the code";
-    elements.algorithmConfidence.dataset.term = "guessed from the code";
+    const manual = algorithm.manual_applied ?? (algorithm.bindings?.mode && algorithm.bindings.mode !== "auto");
+    elements.algorithmConfidence.textContent = manual ? "手動配對" : "自動推測";
+    if (manual) delete elements.algorithmConfidence.dataset.term;
+    else elements.algorithmConfidence.dataset.term = "guessed from the code";
     elements.algorithmConfidence.className = "confidence-badge";
-    elements.algorithmEvidence.textContent = (algorithm.evidence || []).join(", ") || "No specialized pattern matched";
+    elements.algorithmEvidence.textContent = (algorithm.evidence || []).join(", ") || "未符合特定模式";
+}
+
+function renderCompactHeading(view) {
+    const renderer = view?.renderer;
+    const label = ["array", "cells"].includes(renderer) ? "陣列" : COMPACT_RENDERER_LABELS[renderer] || "資料";
+    const parts = [label, view?.name].filter(Boolean);
+    if (view?.ready && ["array", "cells"].includes(renderer)) {
+        const length = view.length ?? view.total_length ?? view.captured_length ?? view.values?.length;
+        if (Number.isInteger(length)) parts.push(`${length} 項`);
+    }
+    elements.algorithmName.textContent = parts.join(" · ");
+    elements.algorithmName.title = parts.join(" · ");
 }
 
 function renderAlgorithm(visualization) {
+    renderCompactHeading(visualization);
+    elements.visualScaleInfo.hidden = true;
+    elements.visualScaleInfo.textContent = "";
+    const scroll = {left: elements.algorithmView.scrollLeft, top: elements.algorithmView.scrollTop};
     elements.algorithmView.replaceChildren();
     elements.algorithmView.className = "algorithm-canvas";
     // Which variable is drawn, so a reference to it (`row ↪ matrix[1]`) can light up its part.
     elements.algorithmView.dataset.view = visualization?.name || "";
     if (visualization?.pending) {
-        renderAlgorithmWaiting(`Running the program again to draw ${visualization.name}…`);
+        renderAlgorithmWaiting(`重新執行以顯示 ${visualization.name}…`);
         return;
     }
     if (!visualization) {
-        renderAlgorithmWaiting("No visualization state is available for this step.");
+        renderAlgorithmWaiting("此步尚無可顯示資料");
         return;
     }
+    const context = {
+        target: elements.algorithmView, result: state.result,
+        step: state.result?.steps[state.currentStep], index: state.currentStep,
+        focus: state.focus, follow: state.follow, bindings: state.bindings, goToStep: stepManually,
+    };
     const renderers = {
         grid: renderGridAlgorithm,
         array: renderArrayAlgorithm,
@@ -1607,7 +1876,31 @@ function renderAlgorithm(visualization) {
         call_tree: renderCallTreeAlgorithm,
         execution: renderExecutionAlgorithm,
     };
-    (renderers[visualization.renderer] || renderExecutionAlgorithm)(visualization);
+    const handled = window.DebuggerFocus?.render(visualization, context)
+        || window.AlgorithmLenses?.render(visualization, context);
+    if (!handled) {
+        (renderers[visualization.renderer] || renderExecutionAlgorithm)(visualization);
+        window.DebuggerFocus?.decorate(visualization, context);
+    }
+    if (elements.algorithmView.querySelector(".focus-operation")) {
+        for (const [chip, term] of [[".focus-read-chip", "Reading"], [".focus-write-chip", "Written"]]) {
+            if (elements.algorithmView.querySelector(chip)) {
+                elements.algorithmView.querySelectorAll(`.algorithm-legend [data-term="${term}"]`).forEach((item) => item.remove());
+            }
+        }
+        elements.algorithmView.querySelectorAll(".algorithm-legend:empty").forEach((item) => item.remove());
+    }
+    if (["array", "cells"].includes(visualization.renderer)) {
+        // Paging can add a capture notice after the base renderer has hidden empty metadata.
+        const meta = elements.algorithmView.querySelector(".algorithm-meta");
+        const summary = meta?.querySelector(":scope > span:first-child");
+        if (summary?.textContent.trim()) summary.hidden = false;
+        if (meta) meta.hidden = ![...meta.children].some((item) => !item.hidden && item.textContent.trim());
+    }
+    if (!state.follow) {
+        elements.algorithmView.scrollLeft = scroll.left;
+        elements.algorithmView.scrollTop = scroll.top;
+    }
 }
 
 function renderAlgorithmWaiting(message) {
@@ -1619,7 +1912,7 @@ function renderAlgorithmWaiting(message) {
 
 function renderGridAlgorithm(view) {
     if (!view.ready) {
-        renderAlgorithmWaiting("Waiting for the program to construct its 2D state…");
+        renderAlgorithmWaiting("等待建立表格…");
         return;
     }
     const rows = view.rows || [];
@@ -1727,7 +2020,7 @@ function algorithmLegend(items) {
         const swatch = document.createElement("span");
         swatch.className = `legend-swatch ${className}`;
         const text = document.createElement("span");
-        text.textContent = label;
+        text.textContent = {Reading: "讀取", Written: "變更", New: "新增", Visited: "已訪問", Frontier: "待處理", Current: "目前", Blocked: "障礙"}[label] || label;
         item.dataset.term = label;
         item.append(swatch, text);
         legend.append(item);
@@ -1737,7 +2030,7 @@ function algorithmLegend(items) {
 
 function renderArrayAlgorithm(view) {
     if (!view.ready) {
-        renderAlgorithmWaiting("Waiting for a numeric sequence to appear…");
+        renderAlgorithmWaiting("等待建立陣列…");
         return;
     }
     const values = view.values || [];
@@ -1855,41 +2148,35 @@ function indexedViewMeta(view, count) {
     meta.className = "algorithm-meta";
     const summary = document.createElement("span");
     // A list too long to read whole says how much is drawn: `a, 0–49 of 80`.
-    const size = view.length
-        ? `0–${count - 1} of ${view.length} items (the rest was not read)`
-        : count ? `${count} items${view.truncated ? ", clipped" : ""}` : "empty";
-    summary.textContent = `${view.name || "array"}, ${size}${view.carried ? ", last known state" : ""}`;
+    const partial = view.truncated || (view.length != null && view.length > count);
+    summary.textContent = `${partial ? `已顯示 ${count}${view.length != null ? ` / ${view.length}` : ""} 項 · 其餘未擷取` : ""}${view.carried ? `${partial ? " · " : ""}沿用上次狀態` : ""}`;
+    summary.hidden = !summary.textContent && !(view.beyond || []).length;
     if (view.carried) summary.dataset.term = "last known state";
     else if (view.truncated || view.length) summary.dataset.term = "clipped";
     (view.beyond || []).forEach((entry) => {
-        summary.append(textSpan(`${entry.label} = ${entry.index} is past the drawn part`, "beyond-note"));
+        summary.append(textSpan(`${entry.label} = ${entry.index} · 顯示範圍外`, "beyond-note"));
     });
     const details = document.createElement("div");
     details.className = "algorithm-meta-details";
-    // The legend explains the Reading and Written marks, so it only shows while this step has some.
-    const legend = [];
-    if ((view.markers || []).some((marker) => marker.role === "active")) legend.push(["active", "Reading"]);
-    if (view.written?.length) legend.push(["written", "Written"]);
-    if (view.added?.length) legend.push(["added", "New"]);
-    if (legend.length) details.append(algorithmLegend(legend));
     if (view.readouts?.length) {
         const readouts = document.createElement("div");
         readouts.className = "algorithm-readouts";
-        view.readouts.forEach((readout) => {
+        view.readouts.filter((readout) => !isDisplayedArraySize(readout.label, readout, view)).forEach((readout) => {
             const item = document.createElement("span");
             item.className = "algorithm-readout";
             item.textContent = `${readout.label} = ${numberText(readout)}`;
             readouts.append(item);
         });
-        details.append(readouts);
+        if (readouts.childElementCount) details.append(readouts);
     }
     meta.append(summary, details);
+    meta.hidden = summary.hidden && !details.childElementCount;
     return meta;
 }
 
 function renderCellsAlgorithm(view) {
     if (!view.ready) {
-        renderAlgorithmWaiting("Waiting for this list to appear…");
+        renderAlgorithmWaiting("等待建立陣列…");
         return;
     }
     const values = view.values || [];
@@ -1970,7 +2257,7 @@ function graphDirectionPicker(view) {
 
 function renderGraphAlgorithm(view) {
     if (!view.ready) {
-        renderAlgorithmWaiting("Waiting for an adjacency structure to appear…");
+        renderAlgorithmWaiting("等待建立圖…");
         return;
     }
     const nodes = view.nodes || [];
@@ -1991,6 +2278,12 @@ function renderGraphAlgorithm(view) {
         summary.textContent = `${view.name}[v]: each arrow points to the parent; roots are on top`;
     } else {
         summary.textContent = `${view.name || "graph"}, ${nodes.length} vertices`;
+    }
+    if (view.edges_truncated || view.capture_truncated) {
+        const note = document.createElement("span");
+        note.className = "truncated-note";
+        note.textContent = `${view.edges_truncated ? ` · drawing ${view.edges?.length || 0} of ${view.edges_total} captured edges` : ""}${view.capture_truncated ? " · adjacency partly captured" : ""}`;
+        summary.append(note);
     }
     // Whether each edge was stored one way (arrows) or both ways is guessed from the whole
     // trace; a symmetric directed graph looks undirected, so the user can override the guess.
@@ -2237,8 +2530,9 @@ const RECURSION_NODE = {height: 46, gapX: 18, gapY: 36, padding: 18, charWidth: 
 function layoutRecursionTree(nodes) {
     const children = new Map();
     const roots = [];
+    const ids = new Set(nodes.map((node) => node.id));
     nodes.forEach((node) => {
-        if (node.parent === null || node.parent === undefined) roots.push(node);
+        if (!ids.has(node.parent)) roots.push(node);
         else children.set(node.parent, [...(children.get(node.parent) || []), node]);
     });
     const longest = Math.max(...nodes.map((node) => recursionNodeText(node).length));
@@ -2280,7 +2574,7 @@ const SEGMENT_NODE = {height: 42, gapX: 10, levelGap: 34, padding: 16, charWidth
 function renderSegmentTreeAlgorithm(view) {
     const layout = (state.result?.algorithm?.views || []).find((item) => item.renderer === "segment_tree" && item.variable === view.name)?.layout;
     if (!layout || !view.ready) {
-        renderAlgorithmWaiting("Waiting for the tree to be built…");
+        renderAlgorithmWaiting("等待建立樹…");
         return;
     }
     const nodes = layout.nodes;
@@ -2394,13 +2688,20 @@ function renderRecursionTreeAlgorithm(view) {
     const tree = state.result?.algorithm?.recursion_tree;
     const step = view.at_step ?? state.currentStep;
     const nodes = (tree?.nodes || []);
-    const visible = nodes.filter((node) => node.start_step <= step);
+    const occurred = nodes.filter((node) => node.start_step <= step);
+    const path = [];
+    for (let id = view.current; id !== null && id !== undefined && nodes[id]; id = nodes[id].parent) path.push(nodes[id]);
+    // An overview has a drawing budget; the focused view can inspect every captured call.
+    const overview = occurred.length > 400;
+    const selectedIds = new Set([...occurred.slice(0, 140), ...occurred.slice(-200), ...path.slice(0, 60)].map((node) => node.id));
+    const visible = overview ? occurred.filter((node) => selectedIds.has(node.id)) : occurred;
     if (!visible.length) {
-        renderAlgorithmWaiting("Waiting for the first function call…");
+        renderAlgorithmWaiting("等待函式呼叫…");
         return;
     }
-    if (!tree.layout) tree.layout = layoutRecursionTree(nodes);
-    const {nodeWidth, width, height} = tree.layout;
+    if (!tree.layout && !overview) tree.layout = layoutRecursionTree(nodes.slice(0, 400));
+    const layout = overview ? layoutRecursionTree(visible) : tree.layout;
+    const {nodeWidth, width, height} = layout;
     const nodeHeight = RECURSION_NODE.height;
     const onStack = new Set();
     for (let id = view.current; id !== null && id !== undefined; id = nodes[id].parent) onStack.add(id);
@@ -2408,7 +2709,7 @@ function renderRecursionTreeAlgorithm(view) {
     const meta = document.createElement("div");
     meta.className = "algorithm-meta is-sticky";
     const summary = document.createElement("span");
-    summary.textContent = `${visible.length} of ${nodes.length} calls${tree.truncated ? ", first 400 shown" : ""}`;
+    summary.textContent = `${occurred.length} of ${nodes.length} calls${overview ? ` · overview draws ${visible.length}; enable Focus to inspect folded branches` : ""}${tree.truncated ? ", trace call budget reached" : ""}`;
     meta.append(summary, algorithmLegend([
         ["active", "Running now"],
         ["on-stack", "Waiting on a call"],
@@ -2439,7 +2740,7 @@ function renderRecursionTreeAlgorithm(view) {
     // Dragged positions are stored relative to the layout, so they survive panel resizes.
     const positions = new Map();
     visible.forEach((node) => {
-        const base = state.recursionPositions.get(node.id) || tree.layout.positions.get(node.id);
+        const base = state.recursionPositions.get(node.id) || layout.positions.get(node.id);
         positions.set(node.id, {x: base.x + offset.x, y: base.y + offset.y});
     });
 
@@ -2527,7 +2828,7 @@ const CALL_CHAIN_NODE = {height: 44, gapX: 44, gapY: 36, padding: 16, charWidth:
 function renderCallTreeAlgorithm(view) {
     const frames = view.frames || [];
     if (!frames.length) {
-        renderAlgorithmWaiting("Waiting for a function call…");
+        renderAlgorithmWaiting("等待函式呼叫…");
         return;
     }
     // Boxes are keyed by stack depth, so a box keeps its dragged place while that frame lives.
@@ -2646,10 +2947,11 @@ function renderExecutionAlgorithm(view) {
 
 function renderEmptyTrace() {
     renderSource(0);
-    elements.location.textContent = "Finished";
+    elements.location.textContent = "完成";
     elements.functionName.textContent = "—";
-    elements.stepLabel.textContent = "No trace events";
-    elements.eventLabel.textContent = "—";
+    elements.stepLabel.textContent = "無步驟";
+    elements.eventLabel.textContent = "";
+    elements.eventLabel.hidden = true;
     elements.variables.className = "panel-body empty-state";
     elements.variables.textContent = "This program produced no trace events.";
     renderOutput("");

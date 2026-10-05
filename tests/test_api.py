@@ -1,6 +1,8 @@
 import asyncio
+import shutil
 
 import httpx
+import pytest
 
 from app.main import app
 
@@ -52,6 +54,7 @@ def test_debug_api_reports_validation_error() -> None:
     assert response.json()["detail"]["issues"][0]["line"] == 1
 
 
+@pytest.mark.skipif(not shutil.which("g++") or not shutil.which("gdb"), reason="C++ toolchain unavailable")
 def test_debug_api_accepts_cpp() -> None:
     async def send() -> httpx.Response:
         transport = httpx.ASGITransport(app=app)

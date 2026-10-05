@@ -10,6 +10,8 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Mono:wght@400;700&family=Atkinson+Hyperlegible+Next:wght@400;500;700&display=swap">
     <link rel="stylesheet" href="{{ url_for('static', path='/style.css') }}?v={{ asset_version }}">
+    <link rel="stylesheet" href="{{ url_for('static', path='/lenses.css') }}?v={{ asset_version }}">
+    <link rel="stylesheet" href="{{ url_for('static', path='/focus.css') }}?v={{ asset_version }}">
     <script>
         // Apply the saved theme before first paint so the page does not flash.
         try {
@@ -21,6 +23,8 @@
     </script>
     <script defer src="{{ url_for('static', path='/highlight.js') }}?v={{ asset_version }}"></script>
     <script defer src="{{ url_for('static', path='/terms.js') }}?v={{ asset_version }}"></script>
+    <script defer src="{{ url_for('static', path='/lenses.js') }}?v={{ asset_version }}"></script>
+    <script defer src="{{ url_for('static', path='/focus.js') }}?v={{ asset_version }}"></script>
     <script defer src="{{ url_for('static', path='/app.js') }}?v={{ asset_version }}"></script>
 </head>
 <body>
@@ -34,24 +38,27 @@
                 </svg>
                 <div>
                     <h1>Code Visual Debugger</h1>
-                    <p>Run a program, then step through it one line at a time.</p>
                 </div>
             </div>
             <div class="header-actions">
+                <label class="language-control" for="example-select">
+                    <span class="visually-hidden">範例</span>
+                    <select id="example-select" aria-label="載入範例"><option value="">選擇範例…</option></select>
+                </label>
                 <label class="language-control" for="language-select">
-                    <span>Language</span>
-                    <select id="language-select" aria-label="Programming language">
+                    <span class="visually-hidden">程式語言</span>
+                    <select id="language-select" aria-label="程式語言">
                         <option value="python" selected>Python</option>
                         <option value="cpp">C++</option>
                     </select>
                 </label>
-                <span id="run-status" class="status-pill idle"><span class="status-dot"></span>Ready</span>
+                <span id="run-status" class="status-pill idle"><span class="status-dot" aria-hidden="true"></span>就緒</span>
                 <a id="help-link" class="button secondary" href="/help" target="_blank" rel="noopener">說明</a>
-                <button id="theme-button" class="button secondary" type="button">Light theme</button>
-                <button id="edit-button" class="button secondary hidden" type="button">Edit code</button>
+                <button id="theme-button" class="button secondary theme-button" type="button" title="切換淺色主題" aria-label="切換淺色主題">☀</button>
+                <button id="edit-button" class="button secondary hidden" type="button">編輯</button>
                 <button id="run-button" class="button primary" type="button">
                     <span class="run-icon" aria-hidden="true">▶</span>
-                    Run
+                    執行
                 </button>
             </div>
         </header>
@@ -63,10 +70,10 @@
                 <div id="left-column" class="left-column">
                     <section class="panel source-panel" data-panel="source">
                         <div class="panel-header">
-                            <h2>Source code</h2>
+                            <h2>程式碼</h2>
                             <div class="panel-tools">
-                                <span id="current-location" class="panel-meta">Not running</span>
-                                <button class="panel-action panel-toggle" type="button" aria-expanded="true" aria-controls="source-body">Hide</button>
+                                <span id="current-location" class="panel-meta">未執行</span>
+                                <button class="panel-action panel-toggle" type="button" aria-expanded="true" aria-controls="source-body" aria-label="收合程式碼" title="收合程式碼">▾</button>
                             </div>
                         </div>
                         <div id="source-body" class="source-workspace">
@@ -109,10 +116,10 @@ main()</textarea>
 
                     <section class="panel stdin-panel" data-panel="stdin">
                         <div class="panel-header">
-                            <h2>Test data <span class="panel-subtitle">stdin</span></h2>
+                            <h2>輸入</h2>
                             <div class="panel-tools">
-                                <span id="stdin-count" class="panel-meta">48 chars</span>
-                                <button class="panel-action panel-toggle" type="button" aria-expanded="true" aria-controls="stdin-body">Hide</button>
+                                <span id="stdin-count" class="visually-hidden">48 chars</span>
+                                <button class="panel-action panel-toggle" type="button" aria-expanded="true" aria-controls="stdin-body" aria-label="收合輸入" title="收合輸入">▾</button>
                             </div>
                         </div>
                         <div id="stdin-body" class="stdin-body">
@@ -131,23 +138,58 @@ main()</textarea>
                 <div id="right-column" class="right-column">
                     <section class="panel algorithm-panel" data-panel="algorithm">
                         <div class="panel-header algorithm-header">
-                            <h2 id="algorithm-name">Algorithm</h2>
+                            <h2 id="algorithm-name">資料</h2>
                             <div class="algorithm-summary">
                                 <label class="view-control" for="view-select" data-term="View">
-                                    <span>View</span>
-                                    <select id="view-select" aria-label="Visualization" disabled>
-                                        <option value="auto">Auto</option>
+                                    <span class="visually-hidden">顯示方式</span>
+                                    <select id="view-select" aria-label="顯示方式" disabled>
+                                        <option value="auto">自動</option>
                                     </select>
                                 </label>
                                 <select id="view-variable-select" class="view-variable-select" aria-label="Variable to draw" hidden></select>
-                                <span id="algorithm-confidence" class="confidence-badge" data-term="guessed from the code">Not analyzed</span>
-                                <span id="algorithm-evidence" class="panel-meta">Run code to detect its structure</span>
-                                <button class="panel-action panel-toggle" type="button" aria-expanded="true" aria-controls="algorithm-view">Hide</button>
+                                <label class="focus-control"><input id="focus-toggle" type="checkbox" checked> 聚焦</label>
+                                <label class="focus-control"><input id="follow-toggle" type="checkbox" checked> 跟隨</label>
+                                <details id="visual-settings" class="visual-settings">
+                                    <summary title="顯示設定" aria-label="顯示設定"><span aria-hidden="true">⚙</span></summary>
+                                    <div class="binding-form">
+                                        <div class="detection-info" aria-label="辨識資訊">
+                                            <h3>辨識資訊</h3>
+                                            <span id="algorithm-detected-name">尚未辨識</span>
+                                            <span id="algorithm-confidence" class="confidence-badge" data-term="guessed from the code">未分析</span>
+                                            <span id="algorithm-evidence" class="panel-meta">執行後辨識結構</span>
+                                            <span id="visual-scale-info" class="panel-meta" hidden></span>
+                                        </div>
+                                        <label>演算法模式<select id="binding-mode">
+                                            <option value="auto">自動辨識</option>
+                                            <option value="dp">DP 狀態轉移</option>
+                                            <option value="graph">圖與佇列</option>
+                                            <option value="sorting">排序與分治</option>
+                                            <option value="dsu">並查集</option>
+                                            <option value="segment_tree">線段樹</option>
+                                            <option value="heap">Heap / Priority queue</option>
+                                            <option value="window">滑動視窗</option>
+                                            <option value="monotonic">單調堆疊 / deque</option>
+                                            <option value="fenwick">Fenwick / BIT</option>
+                                            <option value="string_match">字串比對 / KMP</option>
+                                            <option value="trie">Trie</option>
+                                        </select></label>
+                                        <div id="binding-fields" class="binding-fields"></div>
+                                        <div id="binding-options" class="binding-fields"></div>
+                                        <div class="capture-fields">
+                                            <label>每個容器擷取<select id="capture-items"><option value="50" selected>50 項</option><option value="100">100 項</option><option value="200">200 項</option><option value="500">500 項</option></select></label>
+                                            <label>Python 巢狀深度<select id="capture-depth"><option value="2">2 層</option><option value="3">3 層</option><option value="4" selected>4 層</option><option value="6">6 層</option><option value="8">8 層</option></select></label>
+                                        </div>
+                                        <p class="settings-note">資料超過擷取範圍時會標示未知；提高範圍後重新執行即可檢查更遠的位置。C++ 表格最多 30 × 40。</p>
+                                        <p class="settings-note">選擇變數來修正角色；留空會自動辨識。設定套用後會重新執行目前程式。</p>
+                                        <button id="apply-bindings" class="button secondary" type="button" disabled>套用</button>
+                                    </div>
+                                </details>
+                                <button class="panel-action panel-toggle" type="button" aria-expanded="true" aria-controls="algorithm-view" aria-label="收合資料" title="收合資料">▾</button>
                             </div>
                         </div>
                         <div id="algorithm-inputs" class="algorithm-inputs" aria-label="Input values" data-term="Input values" hidden></div>
                         <div id="algorithm-view" class="algorithm-canvas empty-state">
-                            Run the program to see its data structure drawn here.
+                            執行後顯示資料
                         </div>
                     </section>
 
@@ -155,18 +197,18 @@ main()</textarea>
 
                     <section class="panel variables-panel" data-panel="variables">
                         <div class="panel-header">
-                            <h2>Variables</h2>
+                            <h2>變數</h2>
                             <div class="panel-tools">
                                 <span class="usage-legend">
-                                    <span data-term="Used on this line"><span class="usage-swatch on-line" aria-hidden="true"></span>Used on this line</span>
-                                    <span data-term="Changed by the last line"><span class="usage-swatch changed" aria-hidden="true"></span>Changed by the last line</span>
+                                    <span data-term="Used on this line"><span class="usage-swatch on-line" aria-hidden="true"></span>讀取</span>
+                                    <span data-term="Changed by the last line"><span class="usage-swatch changed" aria-hidden="true"></span>變更</span>
                                 </span>
                                 <span id="function-name" class="panel-meta" data-term="Function">—</span>
-                                <button class="panel-action panel-toggle" type="button" aria-expanded="true" aria-controls="variables">Hide</button>
+                                <button class="panel-action panel-toggle" type="button" aria-expanded="true" aria-controls="variables" aria-label="收合變數" title="收合變數">▾</button>
                             </div>
                         </div>
                         <div id="variables" class="panel-body empty-state">
-                            Run the program to inspect variables.
+                            執行後顯示變數
                         </div>
                     </section>
 
@@ -174,12 +216,12 @@ main()</textarea>
 
                     <section class="panel output-panel" data-panel="stdout">
                         <div class="panel-header">
-                            <h2>stdout</h2>
+                            <h2>輸出</h2>
                             <div class="panel-tools">
-                                <button class="panel-action panel-toggle" type="button" aria-expanded="true" aria-controls="stdout">Hide</button>
+                                <button class="panel-action panel-toggle" type="button" aria-expanded="true" aria-controls="stdout" aria-label="收合輸出" title="收合輸出">▾</button>
                             </div>
                         </div>
-                        <pre id="stdout" class="output-content"><span class="output-placeholder">Program output appears here.</span></pre>
+                        <pre id="stdout" class="output-content"><span class="output-placeholder">尚無輸出</span></pre>
                     </section>
                 </div>
             </div>
@@ -193,7 +235,7 @@ main()</textarea>
             <div class="playback-controls">
                 <button id="play-button" class="button secondary play-button" type="button" disabled aria-pressed="false">
                     <span class="play-icon" aria-hidden="true">▶</span>
-                    <span class="play-label">Play</span>
+                    <span class="play-label">播放</span>
                 </button>
                 <select id="speed-select" class="speed-select" aria-label="Playback speed">
                     <option value="0.25">0.25×</option>
@@ -203,11 +245,19 @@ main()</textarea>
                     <option value="1.75">1.75×</option>
                     <option value="2">2×</option>
                 </select>
+                <select id="step-mode" aria-label="Navigation granularity">
+                    <option value="line">逐行</option>
+                    <option value="event">重要事件</option>
+                    <option value="call">函式呼叫</option>
+                    <option value="return">函式返回</option>
+                    <option value="change">資料變更</option>
+                </select>
+                <button id="call-end-button" class="button secondary" type="button" disabled>跳過呼叫</button>
             </div>
             <div class="timeline-center">
                 <div class="timeline-labels">
-                    <span id="step-label">No trace</span>
-                    <span id="event-label" class="event-badge">—</span>
+                    <span id="step-label">尚未執行</span>
+                    <span id="event-label" class="event-badge" hidden></span>
                 </div>
                 <input id="step-slider" type="range" min="0" max="0" value="0" disabled aria-label="Execution step">
             </div>

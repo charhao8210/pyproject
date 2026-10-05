@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import os
 import re
-import shutil
 import subprocess
 import tempfile
 import zlib
 from dataclasses import dataclass, field
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -23,6 +23,7 @@ from .cpp_source import (
     template_arguments,
 )
 from .serializer import is_zero, trailing_fill
+from .toolchain import resolve_cpp_toolchain
 
 
 CPP_FILENAME = "program.cpp"
@@ -47,13 +48,20 @@ CHAR_TABLE_MARKER = "@chars"
 # Printed instead of a global that no line has touched since the previous stop.
 SAME_VALUE = "@same"
 MAX_VALUE_ITEMS = 50
+_CAPTURE_ITEMS: ContextVar[int] = ContextVar("cpp_capture_items", default=MAX_VALUE_ITEMS)
+
+
+def _value_limit() -> int:
+    return _CAPTURE_ITEMS.get()
+
+
 MAX_TABLE_ROWS = 30
 MAX_TABLE_COLUMNS = 40
 UNREADABLE_VALUES = ("<optimized out>", "<unavailable>", "<error")
 # Static initialization and atexit destructor thunks attribute their code to
 # global declaration lines; they are not user execution steps.
 COMPILER_GENERATED_FUNCTION = re.compile(
-    r"^(?:__static_initialization_and_destruction_\d+|_GLOBAL__sub_I_|__tcf_\d+|__cxx_global_var_init)"
+    r"^(?:__static_initialization_and_destruction_\d+|_GLOBAL__sub_[ID]_|__tcf(?:_\d+|[a-z])|__cxx_global_var_init)"
 )
 
 # Force stdout to be unbuffered so output appears at the step that produced it
@@ -126,13 +134,36 @@ def run_cpp_debugger(
     timeout_seconds: float = 3.0,
     max_steps: int = 5_000,
     extra_views: Iterable[str] = (),
+    bindings: dict[str, str] | None = None,
+    capture_items: int = MAX_VALUE_ITEMS,
 ) -> dict[str, Any]:
-    compiler = shutil.which("g++")
-    debugger = shutil.which("gdb")
+    if not 10 <= capture_items <= 500:
+        raise ValueError("Capture items must be 10–500")
+    token = _CAPTURE_ITEMS.set(capture_items)
+    try:
+        return _run_cpp_debugger(source, stdin_text=stdin_text, timeout_seconds=timeout_seconds,
+                                 max_steps=max_steps, extra_views=extra_views, bindings=bindings)
+    finally:
+        _CAPTURE_ITEMS.reset(token)
+
+
+def _run_cpp_debugger(
+    source: str,
+    *,
+    stdin_text: str = "",
+    timeout_seconds: float = 3.0,
+    max_steps: int = 5_000,
+    extra_views: Iterable[str] = (),
+    bindings: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    compiler, debugger, toolchain_environment = resolve_cpp_toolchain()
     if not compiler or not debugger:
         missing = "g++" if not compiler else "gdb"
         raise CppToolchainError(
             f"C++ debugging requires {missing} to be installed and available on PATH."
+            + (" Install MSYS2 UCRT64 GCC and GDB, then add its bin directory to PATH "
+               "or keep the complete toolchain in .tools/msys64/ucrt64."
+               if os.name == "nt" else " Install both GNU g++ and gdb.")
         )
     if timeout_seconds <= 0:
         raise ValueError("timeout_seconds must be positive")
@@ -159,6 +190,7 @@ def run_cpp_debugger(
                 executable_path,
                 workdir,
                 creation_flags,
+                toolchain_environment,
             )
             discovery = _discover(
                 debugger,
@@ -167,6 +199,7 @@ def run_cpp_debugger(
                 model,
                 workdir,
                 creation_flags,
+                toolchain_environment,
             )
             trace_output, trace_errors, timed_out = _run_trace(
                 debugger,
@@ -177,6 +210,7 @@ def run_cpp_debugger(
                 timeout_seconds,
                 workdir,
                 creation_flags,
+                toolchain_environment,
             )
     except subprocess.TimeoutExpired as error:
         raise CppExecutionTimeoutError(
@@ -229,7 +263,7 @@ def run_cpp_debugger(
         "status": status,
         "error": error,
     }
-    result["algorithm"] = analyze_execution(source, steps, language="cpp", extra_views=extra_views)
+    result["algorithm"] = analyze_execution(source, steps, language="cpp", extra_views=extra_views, bindings=bindings)
     return result
 
 
@@ -250,6 +284,7 @@ def _compile_source(
     executable_path: Path,
     workdir: Path,
     creation_flags: int,
+    environment: dict[str, str],
 ) -> None:
     completed = subprocess.run(
         [
@@ -271,6 +306,7 @@ def _compile_source(
         timeout=12,
         cwd=workdir,
         creationflags=creation_flags,
+        env=environment,
         check=False,
     )
     if completed.returncode == 0:
@@ -288,12 +324,23 @@ def _discover(
     model: SourceModel,
     workdir: Path,
     creation_flags: int,
+    environment: dict[str, str],
 ) -> _Discovery:
     """Find breakpoint lines, DWARF scopes, and the types of namespace-scope variables."""
-    candidates = _candidate_lines(source)
+    code_lines = strip_code(source).splitlines()
+    # A file:line breakpoint on a pure function header can land before its
+    # prologue stores register arguments. The first body statement is safe;
+    # a header with executable code on the same line must still be traced.
+    declaration_headers = {
+        start
+        for start, *_ in (*model.function_blocks, *model.lambdas)
+        if code_lines[start - 1].rstrip().endswith("{")
+    }
+    candidates = [line for line in _candidate_lines(source) if line not in declaration_headers]
     if not candidates:
         return _Discovery()
     commands = [
+        "set prompt",
         "set pagination off",
         "set confirm off",
         "set breakpoint pending off",
@@ -313,24 +360,23 @@ def _discover(
                 f"echo {SCOPE_END_MARKER}\\n",
             ]
         )
-    script_path = workdir / "discover.gdb"
-    script_path.write_text("\n".join(commands) + "\n", encoding="utf-8")
-    # Each -ex command is isolated: an unknown name only fails its own whatis.
-    type_queries: list[str] = []
     for candidate in model.globals:
-        type_queries.extend(
-            ["-ex", f"echo {TYPE_MARKER}{candidate.name}\\n", "-ex", f"whatis {candidate.name}"]
+        commands.extend(
+            [f"echo {TYPE_MARKER}{candidate.name}\\n", f"whatis {candidate.name}"]
         )
+    commands.append("quit")
+    # A command-file error aborts the whole file: declarations with no compiled
+    # line would discard every later breakpoint. Stdin commands continue after
+    # an individual error, and keep long sources off Windows' command line.
     completed = subprocess.run(
         [
             debugger,
             "-q",
-            "-batch",
-            "-x",
-            script_path.name,
-            *type_queries,
+            "-iex",
+            "set auto-load python-scripts off",
             executable_path.name,
         ],
+        input="\n".join(commands) + "\n",
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -338,6 +384,7 @@ def _discover(
         timeout=8,
         cwd=workdir,
         creationflags=creation_flags,
+        env=environment,
         check=False,
     )
     output = completed.stdout
@@ -739,6 +786,7 @@ def _run_trace(
     timeout_seconds: float,
     workdir: Path,
     creation_flags: int,
+    environment: dict[str, str],
 ) -> tuple[str, str, bool]:
     commands = [
         "set pagination off",
@@ -746,7 +794,8 @@ def _run_trace(
         "set breakpoint pending off",
         "set print thread-events off",
         "set print pretty off",
-        f"set print elements {MAX_VALUE_ITEMS}",
+        "set print raw-values on",
+        f"set print elements {_value_limit()}",
         "set print repeats unlimited",
         "set print null-stop on",
         "set width 0",
@@ -780,11 +829,22 @@ def _run_trace(
             ]
         )
     commands.append("run < input.txt")
+    if os.name == "nt":
+        # GDB ignores handled first-chance GCC throws, but an unhandled SEH
+        # throw stops as an unknown signal before GCC prints its terminate
+        # diagnostic. Resume only that exception, leaving native faults alone.
+        commands.extend([
+            "if !$_isvoid($_siginfo)",
+            "if $_siginfo.ExceptionCode == 0x20474343",
+            "signal 0",
+            "end",
+            "end",
+        ])
     script_path = workdir / "trace.gdb"
     script_path.write_text("\n".join(commands) + "\n", encoding="utf-8")
     try:
         completed = subprocess.run(
-            [debugger, "-q", "-batch", "-x", script_path.name, executable_path.name],
+            [debugger, "-q", "-iex", "set auto-load python-scripts off", "-batch", "-x", script_path.name, executable_path.name],
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -792,6 +852,7 @@ def _run_trace(
             timeout=timeout_seconds,
             cwd=workdir,
             creationflags=creation_flags,
+            env=environment,
             check=False,
         )
     except subprocess.TimeoutExpired as error:
@@ -815,9 +876,9 @@ def _value_commands(marker: str, spec: ValueSpec, cached: bool = False, sticky: 
     name = spec.name
     commands: list[str] = []
     if spec.kind == "vector":
-        commands.extend(_sequence_commands(name, MAX_VALUE_ITEMS))
+        commands.extend(_sequence_commands(name, _value_limit()))
     elif spec.kind == "bits":
-        commands.extend(_bits_commands(name, MAX_VALUE_ITEMS))
+        commands.extend(_bits_commands(name, _value_limit()))
     elif spec.kind == "nested":
         commands.extend(
             _table_commands(
@@ -838,11 +899,11 @@ def _value_commands(marker: str, spec: ValueSpec, cached: bool = False, sticky: 
         commands.extend(_native_matrix_commands(name, spec))
     elif spec.kind in {"deque", "queue", "stack"}:
         storage = name if spec.kind == "deque" else f"{name}.c"
-        commands.extend(_deque_commands(storage, spec.kind, MAX_VALUE_ITEMS))
+        commands.extend(_deque_commands(storage, spec.kind, _value_limit()))
     elif spec.kind in TREE_KINDS:
-        commands.extend(_tree_commands(name, spec.kind, spec.row_type.split("|"), MAX_VALUE_ITEMS))
+        commands.extend(_tree_commands(name, spec.kind, spec.row_type.split("|"), _value_limit()))
     elif spec.kind == "priority_queue":
-        commands.extend([f"echo {HEAP_MARKER}\\n", *_sequence_commands(f"{name}.c", MAX_VALUE_ITEMS)])
+        commands.extend([f"echo {HEAP_MARKER}\\n", *_sequence_commands(f"{name}.c", _value_limit())])
     else:
         commands.append(f"output {name}")
     if cached and marker == VECTOR_MARKER:
@@ -873,19 +934,19 @@ def _native_array_commands(name: str, spec: ValueSpec) -> list[str]:
     # refuses values larger than max-value-size (64 KiB) with a fatal error.
     commands = [
         f"set $pv_total = sizeof({name}) / sizeof({name}[0])",
-        f"set $pv_len = $pv_total > {MAX_VALUE_ITEMS} ? {MAX_VALUE_ITEMS} : $pv_total",
+        f"set $pv_len = $pv_total > {_value_limit()} ? {_value_limit()} : $pv_total",
         f"output *&{name}[0]@$pv_len",
     ]
     if spec.element != "text":
         commands.extend(
             [
-                f"if $pv_total > {MAX_VALUE_ITEMS}",
+                f"if $pv_total > {_value_limit()}",
                 "echo ...",
                 "end",
                 # Contest code declares arrays far larger than the input (`dis[100005]`).
                 # A native helper from the prelude finds the last nonzero byte, so the UI
                 # can say the unread rest is all zero without GDB reading every element.
-                f"if $pv_total > {MAX_VALUE_ITEMS}",
+                f"if $pv_total > {_value_limit()}",
                 f"set $pv_used = pvdbg_used_bytes((const unsigned char *) &{name}[0], sizeof({name}))",
                 f'printf "\\n{TAIL_MARKER} %d %d", ($pv_used + sizeof({name}[0]) - 1) / sizeof({name}[0]), $pv_total',
                 "end",
@@ -1344,7 +1405,7 @@ def _serialize_cpp_value(value: str, identity: str) -> dict[str, Any]:
     if value.startswith((TABLE_MARKER, CHAR_TABLE_MARKER)):
         return _serialize_table(value, identity)
     if value.startswith("@bits"):
-        return _serialize_bits(value, identity, MAX_VALUE_ITEMS)
+        return _serialize_bits(value, identity, _value_limit())
     tree = re.match(r"@(set|multiset|map|multimap)\s+(-?\d+)", value)
     if tree:
         return _serialize_tree(value, tree.group(1), int(tree.group(2)), identity)
@@ -1395,8 +1456,8 @@ def _serialize_cpp_value(value: str, identity: str) -> dict[str, Any]:
             inner = inner[:-3]
             truncated = True
         all_parts = _expand_cpp_repeats(_flatten_base_classes(_split_cpp_items(inner)))
-        truncated = truncated or len(all_parts) > MAX_VALUE_ITEMS
-        parts = all_parts[:MAX_VALUE_ITEMS]
+        truncated = truncated or len(all_parts) > _value_limit()
+        parts = all_parts[:_value_limit()]
         object_id = zlib.crc32(identity.encode("utf-8"))
         # std::array prints as its one member, `{_M_elems = {0, 2, 1, 0}}`: the plain array.
         elements = re.match(r"_M_elems\s*=\s*(.*)\Z", parts[0], re.DOTALL) if len(parts) == 1 else None
@@ -1490,7 +1551,7 @@ def _serialize_deque(value: str, label: str, total: int, identity: str) -> dict[
         chunk = chunk.strip()
         if chunk.startswith("{") and chunk.endswith("}"):
             parts.extend(_split_cpp_items(chunk[1:-1]))
-    parts = parts[:MAX_VALUE_ITEMS]
+    parts = parts[:_value_limit()]
     return {
         "type": "list",
         "class_name": label,
@@ -1504,7 +1565,7 @@ def _serialize_deque(value: str, label: str, total: int, identity: str) -> dict[
 
 
 def _serialize_tree(value: str, kind: str, total: int, identity: str) -> dict[str, Any]:
-    lines = [line.strip() for line in value.splitlines()[1:] if line.strip()][:MAX_VALUE_ITEMS]
+    lines = [line.strip() for line in value.splitlines()[1:] if line.strip()][:_value_limit()]
     items = [_serialize_cpp_value(line, f"{identity}[{position}]") for position, line in enumerate(lines)]
     clipped = {"truncated": True} if max(total, 0) > len(items) else {}
     object_id = zlib.crc32(identity.encode("utf-8"))
@@ -1694,9 +1755,9 @@ def _expand_cpp_repeats(parts: list[str]) -> list[str]:
         if not match:
             expanded.append(part)
             continue
-        count = min(int(match.group(2)), MAX_VALUE_ITEMS + 1 - len(expanded))
+        count = min(int(match.group(2)), _value_limit() + 1 - len(expanded))
         expanded.extend([match.group(1).strip()] * max(0, count))
-        if len(expanded) > MAX_VALUE_ITEMS:
+        if len(expanded) > _value_limit():
             break
     return expanded
 
@@ -1729,11 +1790,34 @@ def _clean_program_output(text: str) -> str:
 
 
 def _execution_status(output: str, errors: str) -> tuple[str, dict[str, str] | None]:
+    thrown = re.search(
+        r"terminate called after throwing an instance of '([^']+)'"
+        r"(?:\s*\n\s*what\(\):\s*([^\r\n]*))?",
+        errors,
+    )
+    if thrown:
+        return "exception", {
+            "type": thrown.group(1),
+            "message": (thrown.group(2) or "").strip() or "Uncaught C++ exception.",
+        }
+    failed = re.search(r"Assertion failed[:!]?\s*([^\r\n]*?)(?:,\s*file\s+[^,\r\n]+,\s*line\s+\d+)?\s*$", errors, re.M)
+    if failed:
+        condition = failed.group(1).strip()
+        return "exception", {
+            "type": "AssertionFailed",
+            "message": f"assert({condition}) failed." if condition else "An assert failed.",
+        }
     signal_match = re.search(
-        r"(?:Program|Thread\s+\d+(?:\s+\"[^\"]*\")?)\s+received signal\s+([A-Z0-9_]+),\s*([^\r\n]+)",
+        r"(?:Program|Thread\s+\d+(?:\s+\"[^\"]*\")?)\s+received signal\s+([A-Z0-9_?]+),\s*([^\r\n]+)",
         output,
     )
     if signal_match:
+        if signal_match.group(1) == "?":
+            native_code = re.search(r"unknown target exception (0x[0-9a-f]+)", errors, re.I)
+            return "exception", {
+                "type": "WindowsException",
+                "message": f"Program stopped with Windows exception {native_code.group(1)}." if native_code else "Program stopped with an unknown native signal.",
+            }
         error = {
             "type": signal_match.group(1),
             "message": signal_match.group(2).strip(),
@@ -1744,24 +1828,6 @@ def _execution_status(output: str, errors: str) -> tuple[str, dict[str, str] | N
         output,
     )
     if exit_match and exit_match.group(1).strip() not in {"0", "00"}:
-        thrown = re.search(
-            r"terminate called after throwing an instance of '([^']+)'"
-            r"(?:\s*\n\s*what\(\):\s*([^\r\n]*))?",
-            errors,
-        )
-        if thrown:
-            return "exception", {
-                "type": thrown.group(1),
-                "message": (thrown.group(2) or "").strip() or "Uncaught C++ exception.",
-            }
-        # `assert` prints its condition to stderr, then aborts with exit code 3.
-        failed = re.search(r"Assertion failed[:!]?\s*([^\r\n]*?)(?:,\s*file\s+[^,\r\n]+,\s*line\s+\d+)?\s*$", errors, re.M)
-        if failed:
-            condition = failed.group(1).strip()
-            return "exception", {
-                "type": "AssertionFailed",
-                "message": f"assert({condition}) failed." if condition else "An assert failed.",
-            }
         # GDB prints the exit code in octal (`exited with code 012` is 10).
         raw = exit_match.group(1).strip()
         code = int(raw, 8) if re.fullmatch(r"[0-7]+", raw) else raw

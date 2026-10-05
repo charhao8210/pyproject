@@ -37,6 +37,8 @@ def main() -> None:
             stdin_text=stdin_text,
             max_steps=max_steps,
             on_step=on_step,
+            capture_items=int(payload.get("capture_items", 50)),
+            capture_depth=int(payload.get("capture_depth", 4)),
         )
     except SourceValidationError as error:
         result = {

@@ -53,6 +53,30 @@ async def help_page(request: Request) -> HTMLResponse:
     return response
 
 
+@app.get("/api/examples")
+def examples() -> list[dict[str, str]]:
+    """Small, local examples make every visual mode discoverable without external services."""
+    titles = {
+        "sample1_basic": "Basic values", "sample2_reference": "Shared references",
+        "sample3_loop": "Array loop", "sample4_recursion": "Recursion",
+        "sample5_exception": "Exception", "sample6_dfs": "DFS graph",
+        "sample7_grid_input": "Grid search",
+        "sample8_heap": "Heap / Priority queue", "sample9_sliding_window": "Sliding window",
+        "sample10_monotonic_stack": "Monotonic stack", "sample11_fenwick": "Fenwick / BIT",
+        "sample12_kmp": "String matching / KMP", "sample13_trie": "Trie",
+    }
+    result = []
+    for path in sorted((BASE_DIR.parent / "samples").glob("*"), key=lambda item: (int(''.join(filter(str.isdigit, item.stem)) or 0), item.name)):
+        if path.suffix not in {".py", ".cpp"}:
+            continue
+        code = path.read_text(encoding="utf-8")
+        first_line = code.splitlines()[0] if code.splitlines() else ""
+        title = titles.get(path.stem) or first_line.removeprefix("# ").removeprefix("// ") or path.stem
+        stdin = "5 7\n..#....\n..#..#.\n..#..#.\n.....#.\n###....\n" if path.stem == "sample7_grid_input" else ""
+        result.append({"id": path.name, "title": title, "language": "cpp" if path.suffix == ".cpp" else "python", "code": code, "stdin": stdin})
+    return result
+
+
 JS_SAFE_INTEGER = 2**53 - 1
 
 
@@ -107,6 +131,9 @@ def debug_code(payload: DebugRequest) -> dict:
             stdin_text=payload.stdin,
             language=payload.language,
             extra_views=payload.views,
+            bindings=payload.bindings,
+            capture_items=payload.capture_items,
+            capture_depth=payload.capture_depth,
         )
         _mark_large_integers(result)
         return result
