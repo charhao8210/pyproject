@@ -129,13 +129,13 @@ def test_weight_first_pairs_are_read_as_weight_then_vertex() -> None:
 
 
 def test_pair_order_follows_how_the_code_names_the_elements() -> None:
-    from app.analyzer import _pair_vertex_position
+    from app.classify import pair_vertex_position
 
-    assert _pair_vertex_position("for (auto [v, w] : adj[u])") == 0
-    assert _pair_vertex_position("int w = e.first; int v = e.second;") == 1
-    assert _pair_vertex_position("adj[a].push_back({b, c});") == 0
-    assert _pair_vertex_position("adj[a].push_back({c, b});") == 1
-    assert _pair_vertex_position("int x = 1;") is None
+    assert pair_vertex_position("for (auto [v, w] : adj[u])") == 0
+    assert pair_vertex_position("int w = e.first; int v = e.second;") == 1
+    assert pair_vertex_position("adj[a].push_back({b, c});") == 0
+    assert pair_vertex_position("adj[a].push_back({c, b});") == 1
+    assert pair_vertex_position("int x = 1;") is None
 
 
 def test_repeated_large_numbers_are_not_infinity_without_an_inf_in_the_code() -> None:

@@ -15,6 +15,8 @@ import re
 import tokenize
 from typing import Any
 
+from .graph_view import graph_frontier
+
 
 MAX_ITEMS = 500
 MAX_NODES = 60
@@ -293,9 +295,8 @@ def enrich_model(
             model["uses"] = list(dict.fromkeys([*(model.get("uses") or []), distance]))
         frontier = bindings.get("frontier")
         if frontier and isinstance(post.get(frontier), list):
-            from .analyzer import _graph_frontier
             values = post[frontier][:MAX_ITEMS]
-            _, vertices, entries = _graph_frontier({"frontier": values}, set(map(str, model.get("nodes", []))))
+            _, vertices, entries = graph_frontier({"frontier": values}, set(map(str, model.get("nodes", []))))
             model["frontier"] = {"name": frontier, "items": vertices, "entries": entries or [str(_plain(value)) for value in values]}
             model["uses"] = list(dict.fromkeys([*(model.get("uses") or []), frontier]))
         index = bindings.get("index")

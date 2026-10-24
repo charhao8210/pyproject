@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from app.analyzer import _decode_scope
+from app.values import decode_scope
 from app.lenses import build_events, enrich_model, extend_catalog, view_model
 from app.runner import run_debugger
 
@@ -14,7 +14,7 @@ def _trace(filename):
     source = (SAMPLES / filename).read_text(encoding="utf-8")
     result = run_debugger(source)
     cache = {}
-    scopes = [_decode_scope(step, cache) for step in result["steps"]]
+    scopes = [decode_scope(step, cache) for step in result["steps"]]
     return source, result, scopes
 
 

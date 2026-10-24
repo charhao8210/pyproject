@@ -3,7 +3,7 @@ import shutil
 
 import pytest
 
-from app.analyzer import _is_grid, _logical_length
+from app.values import is_grid, logical_length
 from app.cpp_source import analyze_source
 from app.runner import run_debugger
 
@@ -14,13 +14,13 @@ requires_cpp = pytest.mark.skipif(
 
 
 def test_unused_rows_of_a_fixed_size_char_grid_are_ignored() -> None:
-    assert _is_grid([".#..", ".#.#", "##..", "", ""])
-    assert not _is_grid([".#..", "", "##.."])
+    assert is_grid([".#..", ".#.#", "##..", "", ""])
+    assert not is_grid([".#..", "", "##.."])
 
 
 def test_array_views_keep_data_stored_past_n() -> None:
-    assert _logical_length({"n": 4}, [1, 1, 2, 4, 8, 0, 0]) == 5
-    assert _logical_length({"n": 4}, [3, 1, 2, 0, 0, 0]) == 4
+    assert logical_length({"n": 4}, [1, 1, 2, 4, 8, 0, 0]) == 5
+    assert logical_length({"n": 4}, [3, 1, 2, 0, 0, 0]) == 4
 
 
 def test_declarations_are_recorded_on_the_line_where_they_start() -> None:

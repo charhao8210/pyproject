@@ -3,7 +3,9 @@ import shutil
 
 import pytest
 
-from app.analyzer import _adjacency_rows, _graph_frontier, _is_adjacency, _runtime_shapes
+from app.analyzer import _runtime_shapes
+from app.graph_view import graph_frontier
+from app.values import SetItems, adjacency_rows, is_adjacency
 from app.cpp_runner import _alias_variables
 from app.inputs import input_values
 from app.runner import run_debugger
@@ -17,14 +19,14 @@ requires_cpp = pytest.mark.skipif(
 def test_weighted_adjacency_lists_give_edges_with_weights() -> None:
     adj = [[], [[2, 6], [3, 2]], [], [[2, 3]]]
 
-    assert _is_adjacency(adj)
-    assert _adjacency_rows(adj)[1] == (1, [(2, 6), (3, 2)])
+    assert is_adjacency(adj)
+    assert adjacency_rows(adj)[1] == (1, [(2, 6), (3, 2)])
     # {weight, vertex} pairs: only the second item is always a vertex.
-    assert _adjacency_rows([[], [[60, 2]], [[30, 1]]])[1] == (1, [(2, 60)])
+    assert adjacency_rows([[], [[60, 2]], [[30, 1]]])[1] == (1, [(2, 60)])
 
 
 def test_dijkstra_queue_of_distance_vertex_pairs_is_the_frontier() -> None:
-    name, items, entries = _graph_frontier({"pq": [[0, 1], [7, 3]]}, {"1", "2", "3"})
+    name, items, entries = graph_frontier({"pq": [[0, 1], [7, 3]]}, {"1", "2", "3"})
 
     assert (name, items) == ("pq", ["1", "3"])
     # The queue line keeps the whole entry: the distance it was pushed with can be stale.
@@ -34,8 +36,8 @@ def test_dijkstra_queue_of_distance_vertex_pairs_is_the_frontier() -> None:
 def test_equal_length_tables_are_graphs_only_under_graph_names() -> None:
     table = [[0, 1, 2], [1, 0, 2], [2, 2, 0]]
 
-    assert not _is_adjacency(table, "ways")
-    assert _is_adjacency(table, "adj")
+    assert not is_adjacency(table, "ways")
+    assert is_adjacency(table, "adj")
     assert "graph" not in _runtime_shapes([{"pre": table, "ways": table}])
 
 
@@ -233,7 +235,7 @@ def test_only_lines_that_can_write_a_cached_value_force_a_reread() -> None:
 
 
 def test_auto_draws_the_array_the_loops_write_not_the_input() -> None:
-    from app.analyzer import _loop_written_arrays
+    from app.classify import loop_written_arrays
 
     source = (
         "n, x = map(int, input().split())\n"
@@ -244,14 +246,14 @@ def test_auto_draws_the_array_the_loops_write_not_the_input() -> None:
         "    for coin in c:\n"
         "        dp[s] = (dp[s] + dp[s - coin]) % 7\n"
     )
-    assert _loop_written_arrays(source, "python") == ("dp",)
+    assert loop_written_arrays(source, "python") == ("dp",)
     result = run_debugger(source, stdin_text="3 4\n1 2 3\n")
     assert result["algorithm"]["kind"] == "dynamic_programming"
     assert {step["visualization"].get("name") for step in result["steps"] if step["visualization"].get("ready")} == {"dp"}
 
 
 def test_sets_of_pairs_are_not_grids() -> None:
-    assert "matrix" not in _runtime_shapes([{"ranked": __import__("app.analyzer", fromlist=["_SetItems"])._SetItems([[1, 2], [3, 4]])}])
+    assert "matrix" not in _runtime_shapes([{"ranked": SetItems([[1, 2], [3, 4]])}])
 
 
 def test_writes_through_a_ternary_group_and_later_declarators_count() -> None:

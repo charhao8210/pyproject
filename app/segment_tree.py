@@ -12,6 +12,7 @@ import re
 from typing import Any
 
 from .usage import _integer, _substitute
+from .values import display_value
 
 LOWER_NAMES = ("l", "lo", "tl", "s", "start", "nl", "left", "L", "b", "lx", "low")
 UPPER_NAMES = ("r", "hi", "tr", "e", "end", "nr", "right", "R", "rx", "high")
@@ -153,8 +154,6 @@ def model(
     line_text: str,
     language: str,
 ) -> dict[str, Any]:
-    from .analyzer import _display_value
-
     values = scope.get(spec["array"])
     if not isinstance(values, list):
         return {"renderer": "segment_tree", "ready": False}
@@ -167,7 +166,7 @@ def model(
         "name": spec["array"],
         # Entries past what the tracer read (C++ arrays stop at 50) are unknown, not 0.
         "values": [
-            _display_value(values[entry["id"]], language) if entry["id"] < len(values) else None
+            display_value(values[entry["id"]], language) if entry["id"] < len(values) else None
             for entry in tree_layout["nodes"]
         ],
         "current": current if current in ids else None,
@@ -180,7 +179,7 @@ def model(
         view["base"] = {
             "name": spec["base"],
             "values": [
-                _display_value(base[index], language) if 0 <= index < len(base) else None
+                display_value(base[index], language) if 0 <= index < len(base) else None
                 for index in range(tree_layout["low"], tree_layout["high"] + 1)
             ],
         }

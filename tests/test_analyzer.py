@@ -1,4 +1,5 @@
-from app.analyzer import _is_adjacency, analyze_execution
+from app.analyzer import analyze_execution
+from app.values import is_adjacency
 from app.runner import run_debugger
 
 
@@ -203,11 +204,11 @@ while lo < hi:
 
 
 def test_adjacency_detection_rejects_flag_and_value_tables() -> None:
-    assert _is_adjacency([[2], [0, 2], [1]])
-    assert _is_adjacency([[], [2, 3], [1], [1]])
-    assert not _is_adjacency([[True, False], [False, True]])
-    assert not _is_adjacency([[5, 9], [12, 40]])
-    assert not _is_adjacency([[".", "#"], ["#", "."]])
+    assert is_adjacency([[2], [0, 2], [1]])
+    assert is_adjacency([[], [2, 3], [1], [1]])
+    assert not is_adjacency([[True, False], [False, True]])
+    assert not is_adjacency([[5, 9], [12, 40]])
+    assert not is_adjacency([[".", "#"], ["#", "."]])
 
 
 def test_boolean_visited_array_marks_node_indexes() -> None:
