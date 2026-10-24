@@ -326,8 +326,8 @@ def _show_line_effects(steps: list[dict[str, Any]], after_indices: dict[int, int
     """Draw each step's views as they are once its highlighted line has run.
 
     A stop comes before its line runs, so the state recorded there misses what that line does:
-    `vis[v] = true` only showed as visited one step later (the user's complaint). Each step now
-    shows the next stop's state, whose `written` / `added` marks are exactly that line's writes.
+    `vis[v] = true` would only show as visited one step later. So each step shows the next
+    stop's state, whose `written` / `added` marks are exactly that line's writes.
     The current-line view keeps its own step, a segment tree keeps the nodes this line reads,
     and the names either state draws stay out of Variables. `at_step` is the step drawn.
     """

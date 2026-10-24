@@ -140,7 +140,7 @@ function renderVariables(step, visualization) {
 
 // `mid+1 = 7+1 = ` in front of the value a line assigns. A bare number (`ma = 0`, `r = 1e18`)
 // shows only the result, and the substituted form is left out when it adds nothing or holds a
-// number of 10^6 or more (`(7+1000000000000000000)/2` is unreadable; the user's choice).
+// number of 10^6 or more, which only makes it harder to read (`(7+1000000000000000000)/2`).
 function formulaText(formula, result) {
     if (!formula || /^[-+]?[\d.][\w.']*$/.test(formula.expression.trim())) return "";
     const resultText = compactValue(result);

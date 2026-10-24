@@ -379,7 +379,7 @@ BFS = (
 
 @requires_cpp
 def test_each_line_shows_its_own_effect_on_the_view() -> None:
-    # The user's rule: `vis[1] = true` marks vertex 1 visited on that line's step, not the next.
+    # `vis[1] = true` marks vertex 1 visited on that line's step, not the next.
     steps = run_debugger(BFS, stdin_text="5 5\n1 2\n1 3\n2 3\n1 4\n4 5\n", language="cpp")["steps"]
 
     def at(line: int) -> dict:
@@ -395,7 +395,7 @@ def test_each_line_shows_its_own_effect_on_the_view() -> None:
 
 
 def test_calling_main_does_not_draw_its_final_data_before_it_runs() -> None:
-    # The user's report: stepping onto `main()` drew the grid before the input was read.
+    # Stepping onto `main()` must not draw the grid before the input is read.
     code = (
         "import sys\n"
         "def main():\n"
@@ -476,7 +476,7 @@ def test_backtracking_route_and_line_reads_are_drawn_on_the_graph() -> None:
     steps = run_debugger(MESSAGE_ROUTE, stdin_text=ROUTE_INPUT, language="cpp")["steps"]
     check = next(step["visualization"] for step in steps if step["line"] == 33)
     assert check["reading"] == [{"vertex": "5", "text": "dis[n] = 3"}]
-    # `dis` labels the vertices but stays listed in Variables (the user's choice).
+    # `dis` labels the vertices but stays listed in Variables.
     assert "dis" not in check["uses"]
     compare = next(step["visualization"] for step in steps if step["line"] == 44)
     assert compare["current"] == "5" and compare["checking"] == {"source": "5", "target": "4"}

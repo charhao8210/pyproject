@@ -503,7 +503,7 @@ function renderCellsAlgorithm(view) {
     elements.algorithmView.append(row);
 }
 
-// The user's choice of edge direction for graphs: "auto" follows the trace's guess.
+// Edge direction picked in the graph view; "auto" follows the trace's guess.
 function graphIsDirected(view) {
     if (state.graphDirection === "directed") return true;
     if (state.graphDirection === "undirected") return false;
