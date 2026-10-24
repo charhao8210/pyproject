@@ -1,8 +1,15 @@
 from pathlib import Path
 
+# app.js and the files it is split into (layout.js, variables.js, views.js) load as one program.
+FRONTEND_SCRIPTS = ("layout.js", "variables.js", "views.js", "app.js")
+
+
+def frontend_script() -> str:
+    return "\n".join(Path("app/static", name).read_text(encoding="utf-8") for name in FRONTEND_SCRIPTS)
+
 
 def test_step_navigation_only_scrolls_inside_source_viewer() -> None:
-    script = Path("app/static/app.js").read_text(encoding="utf-8")
+    script = frontend_script()
 
     assert ".scrollIntoView(" not in script
     assert "elements.sourceViewer.scrollTo" in script
@@ -11,7 +18,7 @@ def test_step_navigation_only_scrolls_inside_source_viewer() -> None:
 
 def test_object_graph_panel_is_removed() -> None:
     template = Path("app/templates/index.html").read_text(encoding="utf-8")
-    script = Path("app/static/app.js").read_text(encoding="utf-8")
+    script = frontend_script()
     stylesheet = Path("app/static/style.css").read_text(encoding="utf-8")
 
     assert 'id="graph-panel"' not in template
@@ -23,7 +30,7 @@ def test_object_graph_panel_is_removed() -> None:
 
 def test_language_selector_sends_python_or_cpp() -> None:
     template = Path("app/templates/index.html").read_text(encoding="utf-8")
-    script = Path("app/static/app.js").read_text(encoding="utf-8")
+    script = frontend_script()
 
     assert 'id="language-select"' in template
     assert '<option value="python"' in template
@@ -47,7 +54,7 @@ def test_adaptive_renderer_is_beside_code_and_runtime_event_is_removed() -> None
 
 def test_call_stack_panel_is_removed() -> None:
     template = Path("app/templates/index.html").read_text(encoding="utf-8")
-    script = Path("app/static/app.js").read_text(encoding="utf-8")
+    script = frontend_script()
 
     assert 'id="call-stack"' not in template
     assert "elements.callStack" not in script
@@ -55,7 +62,7 @@ def test_call_stack_panel_is_removed() -> None:
 
 def test_every_workspace_panel_can_be_hidden() -> None:
     template = Path("app/templates/index.html").read_text(encoding="utf-8")
-    script = Path("app/static/app.js").read_text(encoding="utf-8")
+    script = frontend_script()
 
     for name in ("source", "stdin", "algorithm", "variables", "stdout"):
         assert f'data-panel="{name}"' in template
@@ -67,7 +74,7 @@ def test_every_workspace_panel_can_be_hidden() -> None:
 
 def test_autoplay_offers_the_requested_speeds() -> None:
     template = Path("app/templates/index.html").read_text(encoding="utf-8")
-    script = Path("app/static/app.js").read_text(encoding="utf-8")
+    script = frontend_script()
 
     assert 'id="play-button"' in template
     for speed in ("0.25", "0.5", "1", "1.5", "1.75", "2"):
@@ -88,7 +95,7 @@ def test_dark_theme_is_default_with_light_toggle() -> None:
 
 def test_view_and_variable_can_be_chosen_by_hand() -> None:
     template = Path("app/templates/index.html").read_text(encoding="utf-8")
-    script = Path("app/static/app.js").read_text(encoding="utf-8")
+    script = frontend_script()
 
     assert 'id="view-select"' in template
     assert 'id="view-variable-select"' in template
@@ -100,7 +107,7 @@ def test_view_and_variable_can_be_chosen_by_hand() -> None:
 
 def test_code_is_syntax_highlighted_while_editing_and_stepping() -> None:
     template = Path("app/templates/index.html").read_text(encoding="utf-8")
-    script = Path("app/static/app.js").read_text(encoding="utf-8")
+    script = frontend_script()
     stylesheet = Path("app/static/style.css").read_text(encoding="utf-8")
 
     assert template.index("/highlight.js") < template.index("/app.js")
@@ -122,7 +129,7 @@ def test_visited_cells_use_a_check_mark_instead_of_hatching() -> None:
 
 def test_columns_can_be_resized_by_dragging_the_divider() -> None:
     template = Path("app/templates/index.html").read_text(encoding="utf-8")
-    script = Path("app/static/app.js").read_text(encoding="utf-8")
+    script = frontend_script()
 
     assert template.index('id="left-column"') < template.index('id="column-resizer"') < template.index('id="right-column"')
     assert 'role="separator"' in template
@@ -132,7 +139,7 @@ def test_columns_can_be_resized_by_dragging_the_divider() -> None:
 
 def test_right_column_panels_can_be_resized_by_dragging_row_dividers() -> None:
     template = Path("app/templates/index.html").read_text(encoding="utf-8")
-    script = Path("app/static/app.js").read_text(encoding="utf-8")
+    script = frontend_script()
     stylesheet = Path("app/static/style.css").read_text(encoding="utf-8")
 
     algorithm = template.index('class="panel algorithm-panel"')
@@ -149,7 +156,7 @@ def test_right_column_panels_can_be_resized_by_dragging_row_dividers() -> None:
 
 
 def test_variables_put_single_values_in_a_row_and_fold_zero_tails() -> None:
-    script = Path("app/static/app.js").read_text(encoding="utf-8")
+    script = frontend_script()
     stylesheet = Path("app/static/style.css").read_text(encoding="utf-8")
 
     assert 'scalars.className = "scalar-zone"' in script
@@ -160,7 +167,7 @@ def test_variables_put_single_values_in_a_row_and_fold_zero_tails() -> None:
 
 
 def test_variables_panel_skips_drawn_variables_and_never_scrolls_sideways() -> None:
-    script = Path("app/static/app.js").read_text(encoding="utf-8")
+    script = frontend_script()
     stylesheet = Path("app/static/style.css").read_text(encoding="utf-8")
 
     assert "visualization?.uses" in script
@@ -169,7 +176,7 @@ def test_variables_panel_skips_drawn_variables_and_never_scrolls_sideways() -> N
 
 
 def test_graph_renderers_expose_draggable_nodes() -> None:
-    script = Path("app/static/app.js").read_text(encoding="utf-8")
+    script = frontend_script()
     stylesheet = Path("app/static/style.css").read_text(encoding="utf-8")
 
     assert "function enableSvgNodeDragging" in script
@@ -180,7 +187,7 @@ def test_graph_renderers_expose_draggable_nodes() -> None:
 
 
 def test_svg_dragging_maps_pointer_through_screen_ctm() -> None:
-    script = Path("app/static/app.js").read_text(encoding="utf-8")
+    script = frontend_script()
     dragging = script[script.index("function enableSvgNodeDragging"):]
 
     # getBoundingClientRect ignores preserveAspectRatio letterboxing on scaled SVGs.
@@ -191,7 +198,7 @@ def test_svg_dragging_maps_pointer_through_screen_ctm() -> None:
 
 
 def test_array_renderer_uses_backend_interval_and_readouts() -> None:
-    script = Path("app/static/app.js").read_text(encoding="utf-8")
+    script = frontend_script()
     renderer = script[script.index("function renderArrayAlgorithm"):script.index("function renderGraphAlgorithm")]
 
     assert "view.interval" in renderer
@@ -200,14 +207,14 @@ def test_array_renderer_uses_backend_interval_and_readouts() -> None:
 
 
 def test_variables_panel_includes_unshadowed_globals() -> None:
-    script = Path("app/static/app.js").read_text(encoding="utf-8")
+    script = frontend_script()
 
     assert "renderVariables(step, visualization)" in script
     assert "Object.hasOwn(locals, name)" in script
 
 
 def test_recursion_tree_and_call_chain_nodes_are_draggable_and_numbered() -> None:
-    script = Path("app/static/app.js").read_text(encoding="utf-8")
+    script = frontend_script()
     stylesheet = Path("app/static/style.css").read_text(encoding="utf-8")
 
     tree = script[script.index("function renderRecursionTreeAlgorithm"):script.index("function renderCallTreeAlgorithm")]
@@ -221,7 +228,7 @@ def test_recursion_tree_and_call_chain_nodes_are_draggable_and_numbered() -> Non
 
 
 def test_runtime_errors_timeouts_and_rejected_lines_are_marked() -> None:
-    script = Path("app/static/app.js").read_text(encoding="utf-8")
+    script = frontend_script()
     stylesheet = Path("app/static/style.css").read_text(encoding="utf-8")
 
     assert "function lineProblem" in script
@@ -234,7 +241,7 @@ def test_runtime_errors_timeouts_and_rejected_lines_are_marked() -> None:
 
 def test_variables_used_or_changed_by_the_step_are_marked() -> None:
     template = Path("app/templates/index.html").read_text(encoding="utf-8")
-    script = Path("app/static/app.js").read_text(encoding="utf-8")
+    script = frontend_script()
 
     assert 'class="usage-legend"' in template
     assert 'card.classList.toggle("is-on-line"' in script
@@ -243,7 +250,7 @@ def test_variables_used_or_changed_by_the_step_are_marked() -> None:
 
 def test_loop_buttons_skip_the_innermost_loop() -> None:
     template = Path("app/templates/index.html").read_text(encoding="utf-8")
-    script = Path("app/static/app.js").read_text(encoding="utf-8")
+    script = frontend_script()
 
     assert 'id="loop-start-button"' in template and 'id="loop-end-button"' in template
     assert 'id="first-button"' not in template and 'id="last-button"' not in template
@@ -252,7 +259,7 @@ def test_loop_buttons_skip_the_innermost_loop() -> None:
 
 
 def test_two_dimensional_arrays_render_as_tables() -> None:
-    script = Path("app/static/app.js").read_text(encoding="utf-8")
+    script = frontend_script()
     stylesheet = Path("app/static/style.css").read_text(encoding="utf-8")
 
     assert "function renderTableValue" in script
@@ -264,7 +271,7 @@ def test_two_dimensional_arrays_render_as_tables() -> None:
 
 def test_variables_keep_first_seen_order_and_input_values_sit_above_the_view() -> None:
     template = Path("app/templates/index.html").read_text(encoding="utf-8")
-    script = Path("app/static/app.js").read_text(encoding="utf-8")
+    script = frontend_script()
     stylesheet = Path("app/static/style.css").read_text(encoding="utf-8")
 
     assert 'id="algorithm-inputs"' in template
@@ -276,7 +283,7 @@ def test_variables_keep_first_seen_order_and_input_values_sit_above_the_view() -
 
 
 def test_variables_show_old_to_new_values_and_tint_changed_cells() -> None:
-    script = Path("app/static/app.js").read_text(encoding="utf-8")
+    script = frontend_script()
     style = Path("app/static/style.css").read_text(encoding="utf-8")
 
     assert 'textSpan("->", "change-arrow")' in script
@@ -285,7 +292,7 @@ def test_variables_show_old_to_new_values_and_tint_changed_cells() -> None:
 
 
 def test_new_variables_are_tinted() -> None:
-    script = Path("app/static/app.js").read_text(encoding="utf-8")
+    script = frontend_script()
     style = Path("app/static/style.css").read_text(encoding="utf-8")
 
     assert "step.usage?.new" in script and 'card.classList.toggle("is-new"' in script
@@ -294,7 +301,7 @@ def test_new_variables_are_tinted() -> None:
 
 
 def test_assignments_show_their_formula() -> None:
-    script = Path("app/static/app.js").read_text(encoding="utf-8")
+    script = frontend_script()
 
     assert "function formulaText(" in script and "step.usage?.formula" in script
     # Substituted forms holding a number of 10^6 or more are left out.
@@ -302,13 +309,13 @@ def test_assignments_show_their_formula() -> None:
 
 
 def test_large_integers_render_from_their_exact_text() -> None:
-    script = Path("app/static/app.js").read_text(encoding="utf-8")
+    script = frontend_script()
 
     assert "function numberText(" in script and "value.text ?? String(value.value)" in script
 
 
 def test_segment_trees_have_their_own_renderer() -> None:
-    script = Path("app/static/app.js").read_text(encoding="utf-8")
+    script = frontend_script()
     style = Path("app/static/style.css").read_text(encoding="utf-8")
 
     assert "function renderSegmentTreeAlgorithm(" in script
@@ -326,7 +333,7 @@ def test_help_page_and_hover_terms() -> None:
     assert page.status_code == 200 and "使用說明" in page.text and "terms.js" in page.text
     assert 'href="/help"' in client.get("/").text
     terms = Path("app/static/terms.js").read_text(encoding="utf-8")
-    script = Path("app/static/app.js").read_text(encoding="utf-8")
+    script = frontend_script()
     # Every legend label the views draw has an explanation.
     for label in ("Visited", "Frontier", "Current", "Reading", "Written", "New", "Blocked", "Edge being checked", "Returned"):
         assert f'term: "{label}"' in terms
@@ -334,7 +341,7 @@ def test_help_page_and_hover_terms() -> None:
 
 
 def test_graph_direction_switch_pending_views_and_nested_references() -> None:
-    script = Path("app/static/app.js").read_text(encoding="utf-8")
+    script = frontend_script()
     terms = Path("app/static/terms.js").read_text(encoding="utf-8")
     # A symmetric directed graph can be redrawn directed; only one parallel edge is checked.
     assert "function graphDirectionPicker" in script and "view.undirected.map" in script
