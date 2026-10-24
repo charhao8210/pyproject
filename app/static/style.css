@@ -157,7 +157,6 @@ p {
 /* ---------- Header ---------- */
 
 .app-shell {
-    min-width: 1024px;
     max-width: 1920px;
     margin: 0 auto;
     padding: 14px 20px 96px;
@@ -233,6 +232,21 @@ h1 {
     cursor: pointer;
     font-size: 14px;
     font-weight: 500;
+}
+
+#example-select,
+#step-mode,
+.binding-form select {
+    min-height: 32px;
+    padding: 4px 8px;
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    color: var(--pencil);
+    background: var(--sheet-raised);
+}
+
+#example-select {
+    max-width: 210px;
 }
 
 .button,
@@ -628,14 +642,6 @@ h2 {
     font-size: 15px;
     font-weight: 700;
     white-space: nowrap;
-}
-
-.panel-subtitle {
-    margin-left: 6px;
-    color: var(--pencil-faint);
-    font-family: var(--mono);
-    font-size: 12px;
-    font-weight: 400;
 }
 
 .panel-tools {
@@ -1208,12 +1214,6 @@ h2 {
     outline-offset: -1.5px;
 }
 
-.changed-tag {
-    margin-right: 6px;
-    color: var(--write);
-    font-weight: 700;
-}
-
 .type-tag {
     color: var(--pencil-faint);
     font-family: var(--sans);
@@ -1355,12 +1355,33 @@ h2 {
 
 /* ---------- Algorithm view: fills its panel ---------- */
 
+/* Visible overflow lets the settings popover extend past the panel. */
+.algorithm-panel {
+    overflow: visible;
+}
+
+.algorithm-header {
+    position: relative;
+    gap: 10px;
+}
+
+#algorithm-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
 .algorithm-summary {
     display: flex;
+    flex: none;
     align-items: center;
     justify-content: flex-end;
-    gap: 12px;
+    gap: 8px;
     min-width: 0;
+}
+
+.algorithm-panel.is-collapsed .algorithm-summary > :not(.panel-toggle) {
+    display: none;
 }
 
 .view-control {
@@ -1389,20 +1410,126 @@ h2 {
     font-family: var(--mono);
 }
 
+.algorithm-summary > .view-control select {
+    max-width: 130px;
+}
+
+.algorithm-summary .view-variable-select {
+    max-width: 96px;
+}
+
+.focus-control {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 13px;
+    white-space: nowrap;
+}
+
+.focus-control input {
+    margin: 0;
+    accent-color: var(--highlighter);
+}
+
+/* ---------- Display settings (gear button) ---------- */
+
+.visual-settings {
+    flex: none;
+}
+
+.visual-settings summary {
+    display: grid;
+    place-items: center;
+    width: 30px;
+    height: 28px;
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    color: var(--pencil-muted);
+    background: var(--sheet-raised);
+    cursor: pointer;
+    font-size: 18px;
+    list-style: none;
+}
+
+.visual-settings summary::-webkit-details-marker {
+    display: none;
+}
+
+.visual-settings summary:hover,
+.visual-settings[open] summary {
+    border-color: var(--pencil-muted);
+    color: var(--pencil);
+}
+
+.binding-form {
+    position: absolute;
+    z-index: 30;
+    top: calc(100% + 4px);
+    right: 8px;
+    display: grid;
+    gap: 10px;
+    width: min(420px, calc(100vw - 44px));
+    max-height: min(520px, 60vh);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 14px;
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    background: var(--sheet-raised);
+    box-shadow: 0 6px 20px rgb(0 0 0 / .25);
+    font-size: 13px;
+}
+
+.binding-form label {
+    display: grid;
+    gap: 4px;
+    min-width: 0;
+}
+
+.binding-form select {
+    width: 100%;
+    min-width: 0;
+}
+
+.detection-info {
+    display: grid;
+    gap: 4px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--rule);
+}
+
+.detection-info h3 {
+    margin: 0 0 2px;
+    font-size: 13px;
+}
+
+.detection-info .panel-meta {
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+
+.binding-fields,
+.capture-fields {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+    gap: 8px;
+}
+
+.settings-note {
+    color: var(--pencil-muted);
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+#apply-bindings {
+    justify-self: start;
+}
+
 .confidence-badge {
     flex: none;
     color: var(--pencil-faint);
-    font-family: var(--mono);
+    font-family: var(--sans);
     font-size: 12px;
-}
-
-.confidence-badge.high,
-.confidence-badge.medium {
-    color: var(--pencil-muted);
-}
-
-.confidence-badge.high {
-    font-weight: 700;
 }
 
 .algorithm-canvas {
@@ -2086,41 +2213,6 @@ h2 {
     font-weight: 700;
 }
 
-.call-tree-view {
-    display: flex;
-    height: 100%;
-    min-height: 160px;
-    align-items: center;
-    justify-content: center;
-    gap: 12px;
-    flex-wrap: wrap;
-}
-
-.call-tree-node {
-    position: relative;
-    flex: none;
-    min-width: 140px;
-    padding: 12px 14px;
-    border: 1px solid var(--pencil-muted);
-    border-radius: var(--radius);
-    background: var(--sheet-raised);
-    font-family: var(--mono);
-    font-size: 15px;
-    text-align: center;
-}
-
-.call-tree-node.current {
-    border-color: var(--pencil);
-    color: var(--on-highlighter);
-    background: var(--highlighter);
-    font-weight: 700;
-}
-
-.call-tree-arrow {
-    color: var(--pencil-muted);
-    font-size: 20px;
-}
-
 .algorithm-graph-svg {
     display: block;
 }
@@ -2254,10 +2346,10 @@ h2 {
     bottom: 0;
     left: 0;
     display: grid;
-    grid-template-columns: auto auto minmax(240px, 760px) auto auto;
+    grid-template-columns: auto auto minmax(160px, 760px) auto;
     align-items: center;
     justify-content: center;
-    gap: 16px;
+    gap: 10px;
     min-height: 72px;
     padding: 10px 24px;
     border-top: 1px solid var(--rule);
@@ -2269,6 +2361,14 @@ h2 {
     display: flex;
     align-items: center;
     gap: 6px;
+}
+
+.playback-controls {
+    flex-wrap: wrap;
+}
+
+#call-end-button {
+    white-space: nowrap;
 }
 
 .play-button {
@@ -2372,12 +2472,6 @@ h2 {
 #step-slider:disabled::-moz-range-thumb {
     border-color: var(--rule);
     background: var(--sheet);
-}
-
-.keyboard-hint {
-    color: var(--pencil-muted);
-    font-size: 12px;
-    white-space: nowrap;
 }
 
 kbd {
@@ -2521,52 +2615,8 @@ a.button {
     text-decoration: underline dotted;
 }
 
-/* Compact toolbar; detailed settings stay behind the gear button. */
-.app-shell { min-width: 0; }
-.header-actions { flex-wrap: nowrap; }
-.algorithm-panel { overflow: visible; }
-.algorithm-header { position: relative; gap: 10px; }
-#algorithm-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.algorithm-summary { flex: none; gap: 8px; }
-.algorithm-summary > .view-control select { max-width: 130px; }
-.algorithm-summary .view-variable-select { max-width: 96px; }
-#example-select { max-width: 210px; }
-#example-select, #step-mode, .binding-form select {
-    min-height: 32px; padding: 4px 8px; border: 1px solid var(--rule);
-    border-radius: var(--radius); color: var(--pencil); background: var(--sheet-raised);
-}
-.focus-control { display: inline-flex; align-items: center; gap: 3px; white-space: nowrap; font-size: 13px; }
-.focus-control input { accent-color: var(--highlighter); margin: 0; }
-.visual-settings { flex: none; }
-.visual-settings summary {
-    display: grid; place-items: center; width: 30px; height: 28px; list-style: none;
-    border: 1px solid var(--rule); border-radius: var(--radius); background: var(--sheet-raised);
-    color: var(--pencil-muted); cursor: pointer; font-size: 18px;
-}
-.visual-settings summary::-webkit-details-marker { display: none; }
-.visual-settings summary:hover, .visual-settings[open] summary { border-color: var(--pencil-muted); color: var(--pencil); }
-.binding-form {
-    position: absolute; z-index: 30; top: calc(100% + 4px); right: 8px;
-    display: grid; gap: 10px; width: min(420px, calc(100vw - 44px));
-    max-height: min(520px, 60vh); overflow-y: auto; overscroll-behavior: contain;
-    padding: 14px; border: 1px solid var(--rule); border-radius: var(--radius);
-    background: var(--sheet-raised); box-shadow: 0 6px 20px rgb(0 0 0 / .25);
-    font-size: 13px;
-}
-.binding-form label { display: grid; gap: 4px; min-width: 0; }
-.binding-form select { width: 100%; min-width: 0; }
-.detection-info { display: grid; gap: 4px; padding-bottom: 10px; border-bottom: 1px solid var(--rule); }
-.detection-info h3 { margin: 0 0 2px; font-size: 13px; }
-.detection-info .panel-meta { white-space: normal; overflow-wrap: anywhere; }
-.detection-info .confidence-badge { font-family: var(--sans); }
-.binding-fields, .capture-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; }
-.settings-note { color: var(--pencil-muted); font-size: 12px; line-height: 1.5; }
-#apply-bindings { justify-self: start; }
-.algorithm-panel.is-collapsed .algorithm-summary > :not(.panel-toggle) { display: none; }
-.timeline { grid-template-columns: auto auto minmax(160px, 760px) auto; gap: 10px; }
-.timeline .keyboard-hint { display: none; }
-.playback-controls { flex-wrap: wrap; }
-#call-end-button { white-space: nowrap; }
+/* ---------- Narrow windows ---------- */
+
 @media (max-width: 1150px) {
     .app-shell { padding: 12px 14px 124px; }
     .app-header { flex-wrap: wrap; gap: 12px; }
