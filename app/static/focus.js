@@ -107,7 +107,7 @@
         const page = cache.expanded.get(key);
         const open = page !== undefined;
         button.setAttribute("aria-expanded", String(open));
-        button.textContent = `${open ? "▾" : "▸"} ${calls.length} completed ${calls.length === 1 ? "branch" : "branches"} · ${count} ${count === 1 ? "call" : "calls"}`;
+        button.textContent = `${open ? "▼" : "▶"} ${calls.length} completed ${calls.length === 1 ? "branch" : "branches"} · ${count} ${count === 1 ? "call" : "calls"}`;
         button.title = "Completed branches are folded; expand to inspect their recorded calls";
         button.addEventListener("click", () => {
             if (cache.expanded.has(key)) cache.expanded.delete(key);
@@ -159,7 +159,7 @@
         const key = "hidden-path";
         const page = cache.expanded.get(key);
         const wrapper = node("div", "focus-call-summary");
-        const toggle = node("button", "focus-summary-toggle", `${page === undefined ? "▸" : "▾"} ${calls.length} calls on this path folded`);
+        const toggle = node("button", "focus-summary-toggle", `${page === undefined ? "▶" : "▼"} ${calls.length} calls on this path folded`);
         toggle.type = "button";
         toggle.setAttribute("aria-expanded", String(page !== undefined));
         toggle.addEventListener("click", () => {

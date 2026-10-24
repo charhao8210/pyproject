@@ -351,13 +351,77 @@ h1 {
     display: grid;
     grid-template-columns: var(--left-width, minmax(380px, 0.8fr)) 14px minmax(480px, 1.2fr);
     row-gap: 14px;
-    height: calc(100vh - 170px);
+    height: calc(100vh - 200px);
     min-height: 640px;
 }
 
 /* Leave room for a one-line error message so the panels stay above the timeline. */
 .message:not(.hidden) + .workspace-grid {
-    height: calc(100vh - 226px);
+    height: calc(100vh - 256px);
+}
+
+/* A height dragged with the workspace resizer replaces the window-filling one. */
+.workspace-grid.has-custom-height,
+.message:not(.hidden) + .workspace-grid.has-custom-height {
+    height: var(--workspace-height);
+    min-height: 0;
+}
+
+.workspace-footer {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: 26px;
+    margin-top: 4px;
+}
+
+.workspace-resizer {
+    position: relative;
+    flex: 1 1 auto;
+    height: 100%;
+    cursor: row-resize;
+    touch-action: none;
+}
+
+.workspace-resizer::before {
+    position: absolute;
+    top: 12px;
+    right: 0;
+    left: 0;
+    height: 2px;
+    border-radius: 1px;
+    background: transparent;
+    content: "";
+}
+
+.workspace-resizer::after {
+    position: absolute;
+    top: 10px;
+    left: 50%;
+    width: 36px;
+    height: 6px;
+    border-radius: 3px;
+    background: var(--rule);
+    content: "";
+    transform: translateX(-50%);
+}
+
+.workspace-resizer:hover::before,
+.workspace-resizer:focus-visible::before,
+.workspace-resizer.is-dragging::before,
+.workspace-resizer:hover::after,
+.workspace-resizer.is-dragging::after {
+    background: var(--pencil-muted);
+}
+
+.workspace-resizer:focus-visible {
+    outline: none;
+}
+
+/* Display-size menu in each panel header. */
+.panel-zoom {
+    padding: 2px 4px;
+    font-size: 12px;
 }
 
 .left-column,
@@ -611,7 +675,8 @@ h2 {
 .panel-toggle {
     width: 30px;
     padding: 0;
-    font-size: 16px;
+    font-size: 13px;
+    line-height: 1;
 }
 
 .panel.is-collapsed .panel-meta,
@@ -1558,6 +1623,8 @@ h2 {
     font-weight: 700;
 }
 .legend-swatch.active { border-color: var(--pencil); background: var(--highlighter); }
+.legend-swatch.scan { border: 2.5px solid var(--highlighter); }
+.legend-swatch.candidate { border: 2px solid var(--pencil); border-radius: 50%; }
 .legend-swatch.wall { border-color: var(--wall); background: var(--wall); }
 
 .algorithm-grid {
@@ -2519,7 +2586,7 @@ a.button {
     .workspace-grid.left-collapsed, .workspace-grid.right-collapsed {
         grid-template-columns: minmax(0, 1fr); height: auto; min-height: 0;
     }
-    .column-resizer, .row-resizer { display: none; }
+    .column-resizer, .row-resizer, .workspace-footer { display: none; }
     .left-column, .right-column, .workspace-grid.left-collapsed .left-column,
     .workspace-grid.right-collapsed .right-column { flex-direction: column; }
     .left-column:has(.source-panel.is-collapsed) .stdin-panel:not(.is-collapsed),

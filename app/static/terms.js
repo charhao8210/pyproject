@@ -5,7 +5,9 @@
         // Visualizer marks
         {group: "視覺化圖的標記", term: "Visited", tip: "已經走過的格子或節點：visited / vis 陣列為 true，或距離表已經有值（-1、INF 代表還沒走到）。牆壁永遠不算。"},
         {group: "視覺化圖的標記", term: "Frontier", tip: "還在 queue 或 stack 裡、等著被處理的格子。"},
-        {group: "視覺化圖的標記", term: "Current", tip: "程式現在所在的格子或節點，例如 node、u、row/col 指到的位置。"},
+        {group: "視覺化圖的標記", term: "Current", tip: "程式現在所在的格子或節點（黃色實心方塊），例如 node、u、row/col，或從 stack / queue 取出的 c/r 指到的位置。"},
+        {group: "視覺化圖的標記", term: "Scanning", tip: "外層迴圈掃描到的格子（黃框方塊），例如 for i、for j 的 (i, j)。牆壁上也會顯示。"},
+        {group: "視覺化圖的標記", term: "Neighbour being checked", tip: "正在檢查能不能走過去的上下左右鄰格（圓圈），例如 wc/wr、nx/ny、new_row/new_col。圓圈只代表「正在檢查」，不代表已經走過去。"},
         {group: "視覺化圖的標記", term: "Reading", tip: "這一步被當作索引的位置，例如 i、j、mid、l、r 指到的那一格。只標在程式真的用這個變數索引的陣列上。"},
         {group: "視覺化圖的標記", term: "Written", tip: "被這一行寫入、值改變的格子（橘框）。"},
         {group: "視覺化圖的標記", term: "New", tip: "這一行新加進容器的元素（push、push_back、append），只在這一步標成淺藍色，下一步恢復一般顏色。"},

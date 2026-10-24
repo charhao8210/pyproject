@@ -422,6 +422,10 @@ def _show_line_effects(steps: list[dict[str, Any]], after_indices: dict[int, int
 def _after_line(mine: dict[str, Any], after: dict[str, Any], after_index: int) -> dict[str, Any]:
     if mine.get("renderer") in {"execution", "recursion_tree", "call_tree"} or after.get("renderer") != mine.get("renderer"):
         return mine
+    # A carried state is the data a returned call left behind, not what this line did here:
+    # `main()` would otherwise draw main's final table before the input is even read.
+    if after.get("carried"):
+        return mine
     shown = {**after, "at_step": after_index}
     if mine.get("renderer") == "segment_tree":
         # Node values after the line; where the code is (its call path) and what the line reads

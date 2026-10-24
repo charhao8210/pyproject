@@ -394,6 +394,24 @@ def test_each_line_shows_its_own_effect_on_the_view() -> None:
     assert all(step["views"]["execution"]["line"] == step["line"] for step in steps)
 
 
+def test_calling_main_does_not_draw_its_final_data_before_it_runs() -> None:
+    # The user's report: stepping onto `main()` drew the grid before the input was read.
+    code = (
+        "import sys\n"
+        "def main():\n"
+        "    data = sys.stdin.read().split()\n"
+        "    a = [data[0], data[1]]\n"
+        "    print(len(a))\n"
+        "main()\n"
+    )
+    steps = run_debugger(code, stdin_text="..#\n#..\n")["steps"]
+    before = [step for step in steps if step["line"] == 6 and step["event"] == "line"]
+    assert before
+    assert not any(step["visualization"].get("ready") for step in before)
+    # Inside main, the line that builds `a` still shows it on its own step.
+    assert next(step for step in steps if step["line"] == 4)["visualization"].get("ready")
+
+
 ROUTE_INPUT = "5 5\n1 2\n1 3\n2 3\n1 4\n4 5\n"
 MESSAGE_ROUTE = (
     '#include <bits/stdc++.h>\n'

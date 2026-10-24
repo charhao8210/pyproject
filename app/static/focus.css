@@ -26,10 +26,10 @@
 .focus-small-button:disabled { opacity: .4; cursor: default; }
 .focus-call-title:focus-visible, .focus-call-end:focus-visible, .focus-summary-toggle:focus-visible, .focus-small-button:focus-visible, .focus-frontier-details summary:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
 .focus-operation { display: block; position: sticky; top: 0; left: 0; z-index: 5; box-sizing: border-box; max-width: 100%; margin: 0 0 9px; padding: 0; border: 1px solid var(--rule); border-left: 3px solid var(--ink); border-radius: var(--radius); background: var(--sheet); color: var(--pencil-muted); font: 12px/1.5 var(--mono); box-shadow: 0 3px 8px color-mix(in srgb, var(--paper) 75%, transparent); }
-.focus-operation-summary { display: grid; grid-template-columns: 10px minmax(0, 1fr); align-items: baseline; gap: 1px 6px; padding: 5px 8px; list-style: none; cursor: pointer; }
+.focus-operation-summary { display: grid; grid-template-columns: 12px minmax(0, 1fr); align-items: baseline; gap: 1px 6px; padding: 5px 8px; list-style: none; cursor: pointer; }
 .focus-operation-summary::-webkit-details-marker { display: none; }
-.focus-operation-summary::before { content: "▸"; grid-column: 1; grid-row: 1; color: var(--ink); }
-.focus-operation[open] > .focus-operation-summary::before { content: "▾"; }
+.focus-operation-summary::before { content: "▶"; grid-column: 1; grid-row: 1; color: var(--ink); }
+.focus-operation[open] > .focus-operation-summary::before { content: "▼"; }
 .focus-operation-summary:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
 .focus-operation-primary { grid-column: 2; grid-row: 1; min-width: 0; color: var(--pencil); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .focus-operation-range { flex-basis: 100%; color: var(--pencil-faint); font-size: 11px; min-width: 0; overflow-wrap: anywhere; }
