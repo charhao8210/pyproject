@@ -1775,6 +1775,88 @@ h2 {
     font-weight: 700;
 }
 
+/* ---------- Stack and Queue (mockup approved 2026-11-11) ---------- */
+
+.stack-view,
+.queue-view {
+    display: grid;
+    gap: 4px 10px;
+    justify-content: center;
+    align-items: center;
+    padding: 8px 0;
+}
+
+.stack-view {
+    grid-template-columns: auto auto;
+}
+
+.queue-view {
+    grid-template-columns: auto repeat(var(--queue-columns), auto) auto;
+    gap: 4px;
+    overflow-x: auto;
+}
+
+.container-value {
+    min-width: 56px;
+    height: 44px;
+    box-sizing: border-box;
+    padding: 0 8px;
+    border: 1px solid var(--pencil-muted);
+    border-radius: 2px;
+    color: var(--pencil);
+    background: var(--sheet-raised);
+    font-family: var(--mono);
+    font-size: 15px;
+    line-height: 42px;
+    text-align: center;
+    white-space: nowrap;
+}
+
+.stack-view .container-value {
+    min-width: 80px;
+}
+
+.container-value.added {
+    border: 2px solid var(--ink);
+    background: color-mix(in srgb, var(--ink) 22%, transparent);
+    color: var(--ink);
+    font-weight: 700;
+}
+
+.container-value.reading {
+    border: 2px dashed var(--highlighter);
+    font-weight: 700;
+}
+
+.container-tag {
+    color: var(--pencil-faint);
+    font-family: var(--mono);
+    font-size: 12px;
+    text-align: center;
+    white-space: nowrap;
+}
+
+.container-tag.is-strong {
+    color: var(--pencil);
+    font-weight: 700;
+}
+
+.queue-end {
+    padding: 0 6px;
+}
+
+.stack-bottom {
+    padding-top: 4px;
+    border-top: 3px solid var(--pencil-muted);
+}
+
+/* The queue above Auto's graph or grid in BFS. */
+.queue-companion {
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--rule);
+}
+
 /* ---------- Recursion tree ---------- */
 
 .recursion-tree {

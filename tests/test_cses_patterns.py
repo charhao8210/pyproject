@@ -264,3 +264,24 @@ def test_auto_label_and_bar_length_follow_what_is_drawn() -> None:
     assert result["algorithm"]["auto_renderer"] == "array"
     lengths = {len(step["visualization"]["values"]) for step in result["steps"] if step["visualization"].get("ready")}
     assert lengths == {7}
+
+
+def test_a_map_half_way_through_its_input_is_still_the_map() -> None:
+    from app.analyzer import _character_map
+
+    assert _character_map({"back": [[0, 0]] * 3, "a": ["########", "#", ""]})[0] == "a"
+    assert _character_map({"a": ["#", ""]})[0] == "a"
+    assert _character_map({"a": ["#", "########"]})[0] is None
+
+
+CSES_LABYRINTH = '#include<bits/stdc++.h>\nusing namespace std;\n \n#define pb push_back\n#define pii pair<int,int>\n#define s second\n#define f first\nint n,m;\nint fc,fr;\nchar a[1005][1005];\npii back[1005][1005];\nchar mov[1005][1005];\nvoid bfs(int c,int r)\n{\n    queue<pii> dolist;\n    dolist.push({c,r});\n    int dc[]={1,-1,0,0};\n    int dr[]={0,0,1,-1};\n    char dm[]={\'D\',\'U\',\'R\',\'L\'};\n    while(dolist.size()){\n        int nc=dolist.front().f;\n        int nr=dolist.front().s;\n        dolist.pop();\n        if(a[nc][nr]==\'#\'){\n            continue;\n        }\n        if(a[nc][nr]==\'B\'){\n            int oc=nc;\n            int ori=nr;\n            vector<char> ans;\n            while(oc!=fc || ori!=fr){\n                ans.pb({mov[oc][ori]});\n                int tc=back[oc][ori].first;\n                int tr=back[oc][ori].second;\n                oc=tc;\n                ori=tr;\n            }\n            reverse(ans.begin(),ans.end());\n            cout<<"YES"<<\'\\n\';\n            cout<<ans.size()<<\'\\n\';\n            for(auto an:ans){\n                cout<<an;\n            }\n            return;\n        }\n        a[nc][nr]=\'#\';\n        for(int i=0;i<4;i++){\n            int wc=nc+dc[i];\n            int wr=nr+dr[i];\n            if(wc>=0 and wc<n and wr>=0 and wr<m and a[wc][wr]!=\'#\'){\n                dolist.push({wc,wr});\n    \n                  back[wc][wr].f=nc;\n                  back[wc][wr].s=nr;\n                \n                mov[wc][wr]=dm[i];\n            }\n        }\n    }\n    cout<<"NO";\n    return;\n}\nsigned main()\n{\n    cin>>n>>m;\n    for(int i=0;i<n;i++){\n        for(int j=0;j<m;j++){\n            cin>>a[i][j];\n            if(a[i][j]==\'A\'){\n                fc=i;\n                fr=j;\n            }\n        }\n    }\n    bfs(fc,fr);\n}\n'
+
+
+@requires_cpp
+def test_labyrinth_draws_the_maze_while_its_input_is_read() -> None:
+    # The user's CSES 1193 solution: Auto drew the all-zero `back` table while `a` was read.
+    result = run_debugger(
+        CSES_LABYRINTH, language="cpp", stdin_text="5 8\n########\n#.A#...#\n#.##.#B#\n#......#\n########\n"
+    )
+    assert {step["visualization"].get("name") for step in result["steps"]} == {"a"}
+    assert result["steps"][-1]["stdout"] == "YES\n9\nLDDRRRRRU"

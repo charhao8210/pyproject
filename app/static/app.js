@@ -66,6 +66,8 @@ const RENDERER_LABELS = {
     array: "Bars",
     cells: "Cells",
     graph: "Graph",
+    stack: "Stack",
+    queue: "Queue",
     recursion_tree: "Recursion tree",
     call_tree: "Call chain",
     execution: "Current line",
@@ -1612,10 +1614,14 @@ function renderAlgorithm(visualization) {
         array: renderArrayAlgorithm,
         cells: renderCellsAlgorithm,
         graph: renderGraphAlgorithm,
+        stack: renderStackAlgorithm,
+        queue: renderQueueAlgorithm,
         recursion_tree: renderRecursionTreeAlgorithm,
         call_tree: renderCallTreeAlgorithm,
         execution: renderExecutionAlgorithm,
     };
+    // BFS: the queue sits above Auto's graph or grid (the user's layout).
+    if (visualization.container) elements.algorithmView.append(queueCompanion(visualization.container));
     (renderers[visualization.renderer] || renderExecutionAlgorithm)(visualization);
 }
 
@@ -1650,7 +1656,7 @@ function renderGridAlgorithm(view) {
     if (legend.length) meta.append(algorithmLegend(legend));
     // The cells the code holds, as numbers, and the queue in the order it will be taken.
     const details = [...(view.coordinates || [])];
-    if (view.queue) details.push(`${view.queue.name}: ${view.queue.entries.join(" ") || "empty"}`);
+    if (view.queue && !view.container) details.push(`${view.queue.name}: ${view.queue.entries.join(" ") || "empty"}`);
     if (details.length) {
         const readouts = document.createElement("div");
         readouts.className = "algorithm-readouts grid-readouts";
@@ -1720,9 +1726,11 @@ function gridCellText(value) {
 function algorithmViewArea(meta = null) {
     const style = getComputedStyle(elements.algorithmView);
     const metaHeight = meta ? meta.offsetHeight + parseFloat(getComputedStyle(meta).marginBottom) : 0;
+    const companion = elements.algorithmView.querySelector(".queue-companion");
+    const companionHeight = companion ? companion.offsetHeight + parseFloat(getComputedStyle(companion).marginBottom) : 0;
     return {
         width: elements.algorithmView.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight),
-        height: elements.algorithmView.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom) - metaHeight,
+        height: elements.algorithmView.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom) - metaHeight - companionHeight,
     };
 }
 
@@ -1930,6 +1938,96 @@ function renderCellsAlgorithm(view) {
     elements.algorithmView.append(row);
 }
 
+// Stack and Queue views (mockup approved 2026-11-11). The backend picks the drawn `entries`
+// (a stack's 10 nearest the top, a long queue's first 6 and last 2) and the marks.
+function renderStackAlgorithm(view) {
+    if (!view.ready) {
+        renderAlgorithmWaiting("Waiting for this stack to appear…");
+        return;
+    }
+    elements.algorithmView.append(containerMeta(view), stackBody(view));
+}
+
+function renderQueueAlgorithm(view) {
+    if (!view.ready) {
+        renderAlgorithmWaiting("Waiting for this queue to appear…");
+        return;
+    }
+    elements.algorithmView.append(containerMeta(view), queueBody(view));
+}
+
+function queueCompanion(view) {
+    const box = document.createElement("div");
+    box.className = "queue-companion";
+    box.append(containerMeta(view), queueBody(view));
+    return box;
+}
+
+function containerMeta(view) {
+    const meta = document.createElement("div");
+    meta.className = "algorithm-meta";
+    const summary = textSpan(`${view.name}, size ${view.size}${view.carried ? ", last known state" : ""}`, "");
+    if (view.carried) summary.dataset.term = "last known state";
+    const details = document.createElement("div");
+    details.className = "algorithm-meta-details";
+    const legend = [];
+    if (view.reading?.length) legend.push(["reading", "Reading"]);
+    if (view.added?.length) legend.push(["added", "New"]);
+    if (legend.length) details.append(algorithmLegend(legend));
+    meta.append(summary, details);
+    return meta;
+}
+
+function containerCell(view, entry) {
+    const cell = textSpan(entry.text, "container-value");
+    cell.title = entry.text;
+    if ((view.added || []).includes(entry.index)) cell.classList.add("added");
+    if ((view.reading || []).includes(entry.index)) cell.classList.add("reading");
+    return cell;
+}
+
+function stackBody(view) {
+    const body = document.createElement("div");
+    body.className = "stack-view";
+    const entries = view.entries || [];
+    if (!entries.length) body.append(textSpan("empty", "container-tag"), textSpan("", ""));
+    entries.forEach((entry, position) => {
+        body.append(containerCell(view, entry), textSpan(position === 0 ? "← top" : "", "container-tag is-strong"));
+    });
+    const hidden = view.size - entries.length;
+    if (hidden > 0) body.append(textSpan(`… ${hidden} more`, "container-tag"), textSpan("", ""));
+    body.append(textSpan("bottom", "container-tag stack-bottom"), textSpan("", ""));
+    return body;
+}
+
+function queueBody(view) {
+    const entries = view.entries || [];
+    // A jump in index between drawn entries is the folded middle of a long queue.
+    const row = [];
+    entries.forEach((entry, position) => {
+        const gap = position ? entry.index - entries[position - 1].index - 1 : 0;
+        if (gap > 0) row.push({gap});
+        row.push({entry});
+    });
+    const body = document.createElement("div");
+    body.className = "queue-view";
+    body.style.setProperty("--queue-columns", String(Math.max(1, row.length)));
+    body.append(textSpan("", ""));
+    if (!row.length) body.append(textSpan("", ""));
+    row.forEach((item, position) => {
+        const label = !item.entry ? "" : position === 0 ? "front" : position === row.length - 1 ? "back" : "";
+        body.append(textSpan(label, "container-tag is-strong"));
+    });
+    body.append(textSpan("", ""));
+    body.append(textSpan("← pop", "container-tag queue-end"));
+    if (!row.length) body.append(textSpan("empty", "container-tag"));
+    row.forEach((item) => {
+        body.append(item.gap ? textSpan(`… ${item.gap} …`, "container-tag") : containerCell(view, item.entry));
+    });
+    body.append(textSpan("← push", "container-tag queue-end"));
+    return body;
+}
+
 // The user's choice of edge direction for graphs: "auto" follows the trace's guess.
 function graphIsDirected(view) {
     if (state.graphDirection === "directed") return true;
@@ -1968,7 +2066,7 @@ function renderGraphAlgorithm(view) {
     meta.className = "algorithm-meta graph-meta";
     const summary = document.createElement("span");
     summary.className = "graph-frontier";
-    if (view.frontier) {
+    if (view.frontier && !view.container) {
         // Whole entries when the queue holds pairs: `pq: (6, 2)  (8, 3)`.
         const entries = view.frontier.entries || view.frontier.items;
         const front = entries.length ? entries.join("  ") : "empty";

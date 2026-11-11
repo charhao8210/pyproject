@@ -5,6 +5,7 @@ import re
 from dataclasses import dataclass, replace
 from typing import Any, Callable, Iterable
 
+from .containers import container_kinds, container_model, queue_companion
 from .loops import loop_jumps, loop_ranges
 from .recursion import build_recursion_tree
 from .serializer import MAX_ITEMS
@@ -120,9 +121,6 @@ def analyze_execution(
     extra_views: Iterable[str] = (),
 ) -> dict[str, Any]:
     decoded: dict[int, Any] = {}
-    # Memos keyed by object ids, valid only while this trace's decoded values are alive.
-    _CORNERS.clear()
-    _CUBE_CELLS.clear()
     scopes = [_decode_scope(step, decoded) for step in steps]
     shapes = _runtime_shapes(scopes, _edge_id_lists(source))
     if language == "cpp":
@@ -134,9 +132,14 @@ def analyze_execution(
         profile = _classify(features, shapes)
     profile = _with_focus(profile, source, language)
     profile = replace(profile, subscripts=_subscripts(source), pair_vertex=_pair_vertex_position(source))
+    kinds = container_kinds(source, language)
+    if kinds and profile.renderer in {"array", "execution"}:
+        # A program built around a stack or queue draws it, not its arrays.
+        name, kind = next(iter(kinds.items()))
+        profile = AlgorithmProfile(kind, kind.capitalize(), kind, 0.9, (f"push/pop on {name}",), (name,))
 
     # Every view the user can pick is computed up front, so switching views needs no re-run.
-    catalog = _view_catalog(scopes, steps, set(extra_views))
+    catalog = _view_catalog(scopes, steps, set(extra_views), kinds)
     source_lines = source.split("\n")
     recursion_tree, recursion_steps = (
         build_recursion_tree(steps, language)
@@ -169,6 +172,12 @@ def analyze_execution(
         _mark_writes(visualization, previous.get(AUTO_VIEW), scope, previous_scope)
         _mark_line_reads(visualization, step, scope, source_lines, language)
         _mark_infinite(visualization, sentinels, spells_infinity)
+        if visualization.get("renderer") in {"graph", "grid"} and visualization.get("ready") and not visualization.get("carried"):
+            # BFS: Auto draws the queue above the graph or grid (the user's layout).
+            companion = queue_companion(visualization, scope, kinds, line_text, language)
+            if companion is not None:
+                _mark_writes(companion, (previous.get(AUTO_VIEW) or {}).get("container"), scope, previous_scope)
+                visualization = {**visualization, "container": companion, "uses": _unique_names([*visualization.get("uses", []), companion["name"]])}
         previous[AUTO_VIEW] = visualization
         step["visualization"] = visualization
 
@@ -289,9 +298,11 @@ def _after_line(mine: dict[str, Any], after: dict[str, Any], after_index: int) -
     if mine.get("renderer") == "execution" or after.get("renderer") != mine.get("renderer"):
         return mine
     shown = {**after, "at_step": after_index}
-    if mine.get("renderer") == "graph":
-        # What the line reads (`dis[n]`) is read before it runs, so it is this step's.
+    if mine.get("renderer") in {"graph", "stack", "queue"}:
+        # What the line reads (`dis[n]`, `q.front()`) is read before it runs, so it is this step's.
         shown["reading"] = mine.get("reading", [])
+    if mine.get("container") and after.get("container"):
+        shown["container"] = {**after["container"], "reading": mine["container"].get("reading", [])}
     uses = [*after.get("uses", []), *mine.get("uses", [])]
     if uses:
         shown["uses"] = list(dict.fromkeys(uses))
@@ -425,13 +436,14 @@ VISITED_LIKE_NAMES = frozenset(
 REACHED_GRID_NAMES = ("mov", "move", "moves", "back", "from", "pre", "prev", "par", "parent", "dist", "dis", "d", "step", "steps")
 FRONTIER_NAMES = frozenset({"q", "queue", "que", "pq", "st", "stack", "frontier", "dq"})
 MAX_VIEW_VARIABLES = 6
-_VARIABLE_RENDERERS = ("grid", "array", "cells", "graph")
+_VARIABLE_RENDERERS = ("grid", "array", "cells", "graph", "stack", "queue")
 
 
 def _view_catalog(
     scopes: list[dict[str, Any]],
     steps: list[dict[str, Any]],
     requested: set[str] | None = None,
+    kinds: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     """List every (renderer, variable) pair whose data shape appears somewhere in the trace.
 
@@ -459,6 +471,8 @@ def _view_catalog(
                 add("array", name)
             if _is_adjacency(value, name):
                 add("graph", name)
+            if isinstance(value, list) and name in (kinds or {}):
+                add(kinds[name], name)
 
     catalog = []
     for renderer in _VARIABLE_RENDERERS:
@@ -494,6 +508,8 @@ def _view_model(
         return _cells_visualization(scope, profile, name, language, extents)
     if renderer == "graph":
         return _graph_visualization(scope, name, profile.pair_vertex)
+    if renderer in {"stack", "queue"}:
+        return container_model(renderer, name, scope.get(name), line_text, language)
     if renderer == "recursion_tree":
         return {"renderer": "recursion_tree", **(recursion_state or {"current": None, "uses": []})}
     if renderer == "call_tree":
@@ -528,6 +544,9 @@ def _carry(
         carried["markers"] = []
     elif renderer == "graph":
         carried["current"] = None
+    elif renderer in {"stack", "queue"}:
+        carried["reading"] = []
+    carried.pop("container", None)
     return carried
 
 
@@ -545,7 +564,7 @@ def _mark_writes(
     only moved down are not marked either.
     """
     renderer = model.get("renderer")
-    if renderer not in {"grid", "array", "cells"}:
+    if renderer not in {"grid", "array", "cells", "stack", "queue"}:
         return
     comparable = (
         model.get("ready")
@@ -1010,6 +1029,8 @@ def _visualization_for(
         return _array_visualization(scope, profile, None, extents)
     if profile.renderer == "graph":
         return _graph_visualization(scope, None, profile.pair_vertex)
+    if profile.renderer in {"stack", "queue"}:
+        return container_model(profile.renderer, profile.focus[0], scope.get(profile.focus[0]), line_text, language)
     if profile.renderer == "call_tree":
         return _call_tree_visualization(step)
     return _execution_visualization(step)
@@ -1195,17 +1216,7 @@ def _line_text(step: dict[str, Any], source_lines: list[str], language: str) -> 
     return re.sub(r"//.*$", "", text) if language == "cpp" else text.split("#", 1)[0]
 
 
-_CUBE_WRITE_AFTER = re.compile(r"\s*(?:(?:[-+*/%&|^]|<<|>>)?=(?!=)|\+\+|--)")
-
-
-
 _LINE_NAMES: dict[str, tuple[str, ...]] = {}
-_CUBE_CELLS: dict[tuple[Any, ...], list[tuple[bool, list[str], tuple[int, int, int] | None]]] = {}
-
-
-
-_CORNERS: dict[tuple[int, int, int], list[list[Any]]] = {}
-
 
 
 def _character_map(scope: dict[str, Any]) -> tuple[str | None, list[Any] | None]:
@@ -1216,10 +1227,21 @@ def _character_map(scope: dict[str, Any]) -> tuple[str | None, list[Any] | None]
             continue
         if not all(isinstance(row, str) for row in value):
             continue
-        # Before the input is read a C++ char grid is all empty rows; it is still the map.
-        if _is_grid(value) or all(row == "" for row in value):
+        # Before the input is read a C++ char grid is all empty rows, and while it is read its
+        # last row is still short (`["########", "#"]`); it is still the map (CSES Labyrinth
+        # drew the all-zero `back` table instead).
+        if _is_grid(value) or all(row == "" for row in value) or _being_read(value):
             return name, value
     return None, None
+
+
+def _being_read(rows: list[str]) -> bool:
+    """Rows of one width except a shorter, non-empty last one: a map half-way through input."""
+    used = _used_rows(rows)
+    if not used or not used[-1]:
+        return False
+    widths = {len(row) for row in used[:-1]}
+    return len(widths) <= 1 and len(used[-1]) <= min(widths, default=len(used[-1]))
 
 
 def _map_and_table(

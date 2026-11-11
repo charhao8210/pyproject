@@ -412,11 +412,11 @@ def test_queue_pushes_are_new_and_pops_do_not_mark_every_entry_written() -> None
     push =next(step for step in steps if step["line"] == 13)
     assert push["usage"]["cells"]["a"]["appended"] == [{"type": "int", "value": 1}]
     # The pushing line's own step draws the state after it: the new entry, blue (`added`).
-    assert push["visualization"]["values"] == [1, 2, 3, 4, 1]
+    assert push["visualization"]["renderer"] == "queue" and push["visualization"]["values"] == ["1", "2", "3", "4", "1"]
     assert push["visualization"]["added"] == [4] and push["visualization"]["written"] == []
     # The pop on the next line: the entries only moved down, so nothing is written or new.
     pop = steps[push["step"] + 1]
-    assert pop["visualization"]["values"] == [2, 3, 4, 1]
+    assert pop["visualization"]["values"] == ["2", "3", "4", "1"]
     assert pop["visualization"]["written"] == [] and pop["visualization"]["added"] == []
 
 
