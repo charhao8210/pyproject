@@ -1,6 +1,9 @@
 """Linked List view (design approved 2026-11-11, mockup views-dark.png)."""
 
+import shutil
 from pathlib import Path
+
+import pytest
 
 from app.runner import run_debugger
 from app.serializer import serialize_value
@@ -95,3 +98,69 @@ def test_a_list_longer_than_what_is_read_ends_in_more() -> None:
     view = result["steps"][-1]["visualization"]
     assert view["rows"][0]["end"] == {"kind": "more"} and view["partial"]
     assert "…" not in _texts(view["rows"][0])
+
+
+requires_cpp = pytest.mark.skipif(
+    not (shutil.which("g++") and shutil.which("gdb")),
+    reason="g++ and gdb are required for C++ tracing tests",
+)
+
+CPP_LIST = """#include <bits/stdc++.h>
+using namespace std;
+struct Node {
+    int val;
+    Node *next;
+};
+Node *head = nullptr;
+Node *reverse(Node *h) {
+    Node *prev = nullptr, *cur = h;
+    while (cur) {
+        Node *nxt = cur->next;
+        cur->next = prev;
+        prev = cur;
+        cur = nxt;
+    }
+    return prev;
+}
+int main() {
+    Node *bad = (Node *) 0x10;
+    for (int v = 3; v >= 1; v--) {
+        head = new Node{v, head};
+    }
+    Node *cur = head;
+    while (cur) {
+        cur = cur->next;
+    }
+    head = reverse(head);
+    Node *loop = new Node{7, nullptr};
+    loop->next = new Node{8, loop};
+    return 0;
+}
+"""
+
+
+def test_cpp_node_structs_and_their_pointers_are_found() -> None:
+    from app.cpp_source import analyze_source
+
+    model = analyze_source(CPP_LIST)
+    assert model.node_types == frozenset({"Node"})
+    lists = {(spec.name, spec.parameter) for spec in model.vectors if spec.kind == "list"}
+    assert {("h", True), ("prev", False), ("cur", False), ("nxt", False), ("bad", False), ("loop", False)} <= lists
+
+
+@requires_cpp
+def test_a_cpp_list_is_read_along_its_next_pointers() -> None:
+    result = run_debugger(CPP_LIST, language="cpp")
+    assert result["status"] == "completed"
+    assert result["algorithm"]["auto_renderer"] == "linked_list"
+    views = [step["visualization"] for step in result["steps"] if step["visualization"].get("ready")]
+    assert any(
+        [_texts(row) for row in view["rows"]] == [["1", "2", "3"]] and _pointers(view["rows"][0]) == {"head": "1", "cur": "2"}
+        for view in views
+    )
+    assert any(sorted(map(_texts, view["rows"])) == [["2", "1"], ["3"]] for view in views)
+    last = result["steps"][-1]["visualization"]
+    cycle = next(row for row in last["rows"] if _texts(row) == ["7", "8"])
+    assert cycle["end"] == {"kind": "cycle", "to": cycle["items"][0]["id"]}
+    # `bad` points at unreadable memory: it is not a node and the trace survives it.
+    assert "bad" not in last["uses"]

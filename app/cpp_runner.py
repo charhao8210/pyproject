@@ -56,6 +56,7 @@ TAIL_MARKER = "@tail"
 TABLE_MARKER = "@rows"
 HEAP_MARKER = "@heap"
 CHAR_TABLE_MARKER = "@chars"
+LIST_MARKER = "@list"
 # Printed instead of a global that no line has touched since the previous stop.
 SAME_VALUE = "@same"
 MAX_VALUE_ITEMS = 50
@@ -89,6 +90,35 @@ extern "C" __attribute__((used, noinline, optimize("O2")))
 unsigned long long pvdbg_used_bytes(const unsigned char *data, unsigned long long size) {
     while (size > 0 && data[size - 1] == 0) --size;
     return size;
+}
+
+// Called from GDB: how many linked list nodes from `node` can be read along `next` (at most
+// `limit`, stopping at null, at memory that is not readable, or back at the start). GDB
+// aborts a whole stop on one unreadable address, and an uninitialised `Node *p;` holds one.
+#ifdef _WIN32
+// kernel32's VirtualQuery under another name, so a program including <windows.h> still compiles.
+extern "C" unsigned long long pvdbg_virtual_query(const void *, void *, unsigned long long) __asm__("VirtualQuery");
+#endif
+extern "C" __attribute__((used, noinline))
+int pvdbg_chain(const char *node, unsigned long long next_offset, unsigned long long size, int limit) {
+    const char *start = node;
+    int count = 0;
+    while (node && count < limit) {
+#ifdef _WIN32
+        // MEMORY_BASIC_INFORMATION (x64): base, allocation base, protect, region size, state, protect.
+        unsigned long long info[6];
+        if (!pvdbg_virtual_query(node, info, sizeof info)) break;
+        unsigned int state = ((unsigned int *) info)[8], protect = ((unsigned int *) info)[9];
+        if (state != 0x1000 || !protect || (protect & 0x101)) break;
+        if ((unsigned long long) (node - (const char *) info[0]) + size > info[3]) break;
+#endif
+        // shortcut: elsewhere nodes are not checked, so a garbage pointer ends the trace with a
+        // debugger error; add an mincore/pipe check if the app runs off Windows.
+        ++count;
+        node = *(const char *const *) (node + next_offset);
+        if (node == start) break;
+    }
+    return count;
 }
 """
 
@@ -423,7 +453,7 @@ def _discover(
         dimensions = re.search(r"(?:\s*\[\d*\])+\s*$", type_text)
         base = type_text[: dimensions.start()] if dimensions else type_text
         dimension_count = dimensions.group(0).count("[") if dimensions else 0
-        classified = classify_type(base, dimension_count, model.aliases)
+        classified = classify_type(base, dimension_count, model.aliases, model.node_types)
         if classified is None:
             continue
         kind, element, row_type = classified
@@ -565,7 +595,7 @@ def _extraction_plan(
         if not _cacheable_local(spec, code_lines, alias_names)
     }
     cached = [
-        *(f"$pv_dirty_{spec.name}" for spec in discovery.global_specs),
+        *(f"$pv_dirty_{spec.name}" for spec in discovery.global_specs if spec.kind != "list"),
         *(f"$pv_ldirty_{name}" for name in sorted(local_cached)),
     ]
     plan[0] = [
@@ -667,7 +697,7 @@ def _extraction_plan(
         for spec in discovery.global_specs:
             if spec.name not in scope and spec.visible_at(line):
                 commands.extend(
-                    _value_commands(GLOBAL_MARKER, spec, cached=True, sticky=f"$pv_dirty_{spec.name}" in sticky_flags)
+                    _value_commands(GLOBAL_MARKER, spec, cached=spec.kind != "list", sticky=f"$pv_dirty_{spec.name}" in sticky_flags)
                 )
         # Marking runs after extraction: the line itself executes after this stop.
         plan[line] = commands + plan[line]
@@ -817,7 +847,8 @@ def _alias_targets(code: str, alias: str) -> frozenset[str] | None:
 
 
 def _cacheable_local(spec: ValueSpec, code_lines: list[str], alias_names: set[str]) -> bool:
-    if spec.parameter or spec.name in alias_names:
+    # `cur->next = prev` changes what `head` reaches without naming it: lists are always read.
+    if spec.parameter or spec.name in alias_names or spec.kind == "list":
         return False
     declaration = code_lines[spec.declaration_line - 1] if 0 < spec.declaration_line <= len(code_lines) else ""
     return not re.search(rf"[&*]\s*{re.escape(spec.name)}\b", declaration)
@@ -1013,6 +1044,8 @@ def _value_commands(marker: str, spec: ValueSpec, cached: bool = False, sticky: 
         commands.extend(_tree_commands(name, spec.kind, spec.row_type.split("|"), MAX_VALUE_ITEMS))
     elif spec.kind == "priority_queue":
         commands.extend([f"echo {HEAP_MARKER}\\n", *_sequence_commands(f"{name}.c", MAX_VALUE_ITEMS)])
+    elif spec.kind == "list":
+        commands.extend(_list_commands(name, spec.element))
     else:
         commands.append(f"output {name}")
     if cached and marker == VECTOR_MARKER:
@@ -1098,6 +1131,62 @@ def _tree_commands(name: str, kind: str, types: list[str], limit: int) -> list[s
         "set $pv_left = $pv_left - 1",
         "end",
     ]
+
+
+def _list_commands(name: str, node_type: str) -> list[str]:
+    """Print `@list <count> <address>` and then `<address> {fields}` for each node `name` reaches
+    along `next`; `pvdbg_chain` counts only nodes that are safe to read."""
+    return [
+        f"set $pv_lc = pvdbg_chain((const char *) {name}, (unsigned long long) &(({node_type} *) 0)->next, sizeof({node_type}), {MAX_VALUE_ITEMS})",
+        f'printf "{LIST_MARKER} %d %llu {node_type}", $pv_lc, (unsigned long long) {name}',
+        f"set $pv_lp = {name}",
+        "while $pv_lc > 0",
+        'printf "\\n%llu ", (unsigned long long) $pv_lp',
+        "output *$pv_lp",
+        "set $pv_lp = $pv_lp->next",
+        "set $pv_lc = $pv_lc - 1",
+        "end",
+    ]
+
+
+def _serialize_list(value: str) -> dict[str, Any]:
+    """Nodes printed by `_list_commands` as nested node dicts keyed by address, so one node seen
+    from `head` and from `cur` is one object; a `next` back into the chain is a reference."""
+    header, *lines = value.split("\n")
+    _, count_text, address_text, node_type = header.split()[:4]
+    count, address = int(count_text), int(address_text)
+    if not count:
+        if not address:
+            return {"type": "none", "value": None}
+        return {"type": "object", "class_name": "C++ value", "value": hex(address)}
+    nodes = []
+    for line in lines[:count]:
+        node_address, _, fields = line.strip().partition(" ")
+        node = _serialize_cpp_value(fields, f"@{node_address}")
+        if node.get("type") != "dict":
+            break
+        nodes.append({**node, "class_name": node_type, "object_id": int(node_address)})
+    addresses = {node["object_id"] for node in nodes}
+    following = None
+    for node in reversed(nodes):
+        entries = []
+        for entry in node["entries"]:
+            if entry["key"].get("value") == "next":
+                link = entry["value"]
+                target = re.search(r"0x[0-9a-fA-F]+", str(link.get("value", "")))
+                if link.get("type") == "none":
+                    pass
+                elif following is not None:
+                    link = following
+                elif target and int(target.group(0), 16) in addresses:
+                    link = {"type": "reference", "object_id": int(target.group(0), 16)}
+                else:
+                    # Not read: past the node limit, or unreadable memory.
+                    link = {"type": "object", "class_name": "C++ value", "value": link.get("value", "")}
+                entry = {**entry, "value": link}
+            entries.append(entry)
+        following = {**node, "entries": entries}
+    return following or {"type": "object", "class_name": "C++ value", "value": hex(address)}
 
 
 def _typed_output(type_text: str, address: str) -> list[str]:
@@ -1529,6 +1618,8 @@ def _serialize_cpp_value(value: str, identity: str) -> dict[str, Any]:
     pointer = re.fullmatch(r"(?:\([^()]*\*\)\s*)?0x[0-9a-fA-F]+\s*<([^<>]+)>", value)
     if pointer:
         return {"type": "object", "class_name": "pointer", "value": f"→ {pointer.group(1)}"}
+    if value.startswith(LIST_MARKER + " "):
+        return _serialize_list(value)
     if value.startswith((TABLE_MARKER, CHAR_TABLE_MARKER)):
         return _serialize_table(value, identity)
     if value.startswith("@bits"):

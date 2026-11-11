@@ -162,6 +162,8 @@ class SourceModel:
     lambdas: tuple[tuple[int, int, str], ...] = ()
     # Each variable's type as the source declares it (`_declared_types`).
     declared_types: dict[tuple[int, str], tuple[tuple[int, str], ...]] = field(default_factory=dict)
+    # Structs with a `next` pointer to their own type: linked list nodes (`_node_types`).
+    node_types: frozenset[str] = frozenset()
 
     def declared_type(self, name: str, line: int, is_global: bool = False) -> str | None:
         """The type `name` was declared with, for a stop on `line`: the last declaration in
@@ -192,7 +194,8 @@ def analyze_source(source: str) -> SourceModel:
     aliases = _type_aliases(text)
     macros = _type_macros(source)
     raw_casts = not any(name in _BUILTIN_TYPE_WORDS for name in macros)
-    vectors = _vector_declarations(text, index, {**aliases, **macros})
+    node_types, struct_bodies = _node_types(text, index)
+    vectors = _vector_declarations(text, index, {**aliases, **macros}) + _list_declarations(text, index, node_types, struct_bodies)
     if not raw_casts:
         # Tree containers keep their element types: they come from macro-expanded text.
         vectors = [spec if spec.kind in TREE_KINDS else replace(spec, row_type="") for spec in vectors]
@@ -207,7 +210,77 @@ def analyze_source(source: str) -> SourceModel:
         raw_casts=raw_casts,
         lambdas=tuple(_named_lambdas(text, index)),
         declared_types=_declared_types(text, index),
+        node_types=node_types,
     )
+
+
+_STRUCT_HEAD = re.compile(r"\b(?:struct|class)\s+([A-Za-z_]\w*)\s*(?::[^{;]*)?\{")
+
+
+def _node_types(text: str, index: _TextIndex) -> tuple[frozenset[str], list[tuple[int, int]]]:
+    """Names of structs holding `Name *next` (linked list nodes), and every struct body's span."""
+    names = set()
+    bodies = []
+    for match in _STRUCT_HEAD.finditer(text):
+        closing = index.closing_brace(match.end() - 1)
+        if closing is None:
+            continue
+        bodies.append((match.end() - 1, closing))
+        name = match.group(1)
+        if re.search(rf"\b{re.escape(name)}\s*\*\s*next\b", text[match.end() : closing]):
+            names.add(name)
+    return frozenset(names), bodies
+
+
+def _list_declarations(
+    text: str,
+    index: _TextIndex,
+    node_types: frozenset[str],
+    struct_bodies: list[tuple[int, int]],
+) -> list[ValueSpec]:
+    """`Node *cur = head, *nxt;` and `Node *h` parameters: pointers read along `next`."""
+    if not node_types:
+        return []
+    declarations: list[ValueSpec] = []
+    names = "|".join(map(re.escape, sorted(node_types)))
+    declarator = re.compile(r"\s*\*\s*(?:const\b\s*)?([A-Za-z_]\w*)")
+    for match in re.finditer(rf"(?<![\w:.>])(?:struct\s+)?(?:{names})\b(?=\s*\*)", text):
+        start = match.start()
+        if index.brace_depth[start] == 0 and index.paren_depth[start] == 0:
+            continue
+        if any(opening < start < closing for opening, closing in struct_bodies):
+            continue
+        parameter_like = index.paren_depth[start] > 0
+        cursor = match.end()
+        while True:
+            name_match = declarator.match(text, cursor)
+            if not name_match or name_match.group(1) in _NON_DECLARATOR_WORDS:
+                break
+            after = _skip_spaces(text, name_match.end())
+            if after < len(text) and text[after] in "([":
+                break
+            span = _declaration_span(text, index, name_match.start(1), parameter_like)
+            if span:
+                ready, scope_end, inclusive = span
+                declarations.append(
+                    ValueSpec(
+                        name=name_match.group(1),
+                        kind="list",
+                        element=match.group(0).split()[-1],
+                        declaration_line=index.line_of(name_match.start(1)),
+                        ready_line=index.line_of(ready),
+                        scope_end_line=index.line_of(scope_end),
+                        end_inclusive=inclusive,
+                        parameter=parameter_like,
+                    )
+                )
+            if parameter_like:
+                break
+            separator = _next_top_level_separator(text, name_match.end())
+            if separator is None or text[separator] != ",":
+                break
+            cursor = separator + 1
+    return declarations
 
 
 _NAMED_LAMBDA = re.compile(
@@ -296,6 +369,7 @@ def classify_type(
     type_text: str,
     dimensions: int,
     aliases: dict[str, str],
+    node_types: frozenset[str] = frozenset(),
 ) -> tuple[str, str, str] | None:
     """Map a declared or GDB-reported type to an extraction strategy.
 
@@ -307,6 +381,9 @@ def classify_type(
     base = _normalize_type(expand_aliases(type_text, aliases))
     if not base or base.startswith("const ") or "(" in base:
         return None
+    pointer = re.fullmatch(r"(?:struct )?([A-Za-z_]\w*) ?\*", base)
+    if pointer and pointer.group(1) in node_types:
+        return ("list", pointer.group(1), "") if dimensions == 0 else None
     if base in FUNDAMENTAL_TYPES or base.startswith("pair<"):
         # Character arrays print as C strings, so their buffer size is not a length.
         element = "text" if base in {"char", "signed char", "unsigned char"} else ""

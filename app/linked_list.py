@@ -120,6 +120,9 @@ def linked_list_model(step: dict[str, Any], line_text: str, language: str) -> di
             end = {"kind": "joins", "to": str(current), "text": _node_text(nodes[current], language)}
         chains.append((chain, end, current))
 
+    # Rows keep their order between steps: the one holding the first variable (`head`) on top.
+    order = {object_id: position for position, object_id in reversed(list(enumerate(targets.values())))}
+    chains.sort(key=lambda chain: min((order[node] for node in chain[0] if node in order), default=len(order)))
     values = {str(object_id): _node_text(nodes[object_id], language) for object_id in placed}
     rows = []
     for chain, end, target in chains:
