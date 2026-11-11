@@ -9,6 +9,7 @@
         {group: "視覺化圖的標記", term: "Reading", tip: "這一步被當作索引的位置，例如 i、j、mid、l、r 指到的那一格。只標在程式真的用這個變數索引的陣列上。3D 表格裡是這一行讀到的格子（黃色虛線框），例如 dp[i - 1][j][k]。"},
         {group: "視覺化圖的標記", term: "Written", tip: "被這一行寫入、值改變的格子（橘框）。"},
         {group: "視覺化圖的標記", term: "New", tip: "這一行新加進容器的元素（push、push_back、append），只在這一步標成淺藍色，下一步恢復一般顏色。"},
+        {group: "視覺化圖的標記", term: "Linked list", tip: "鏈結串列：有 next 欄位的物件（例如 Node）畫成「值 | •」的方塊，箭頭指向 next。上方的名字是指到這個節點的變數（head、cur），∅ 代表 next 是 None；從最後一個節點繞回前面的線代表有環。很長的串列只畫前 6 個和後 2 個，中間寫「… N …」，但被變數指到的節點一定畫出來。"},
         {group: "視覺化圖的標記", term: "Blocked", tip: "牆壁（# 或 *），不能走。"},
         {group: "視覺化圖的標記", term: "In queue", tip: "現在在 queue、stack 或 priority_queue 裡的節點（虛線外圈）。上方那行依序列出整個佇列，第一個最先被取出。"},
         {group: "視覺化圖的標記", term: "Route", tip: "程式正在組出的答案路徑（例如 route、path 陣列），用藍色粗線依序連起來；回溯時連到目前的 now。"},

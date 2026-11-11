@@ -1850,6 +1850,128 @@ h2 {
     border-top: 3px solid var(--pencil-muted);
 }
 
+/* ---------- Linked List (mockup approved 2026-11-11) ---------- */
+
+.list-view {
+    position: relative;
+    display: flex;
+    align-items: flex-end;
+    justify-content: safe center;
+    padding: 8px 0 22px;
+    overflow-x: auto;
+}
+
+.list-node-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+}
+
+.list-pointers {
+    min-height: 34px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-end;
+}
+
+.list-node {
+    display: grid;
+    grid-template-columns: minmax(44px, auto) 22px;
+    height: 44px;
+    box-sizing: border-box;
+    border: 1px solid var(--pencil-muted);
+    border-radius: 2px;
+    color: var(--pencil);
+    background: var(--sheet-raised);
+    font-family: var(--mono);
+    font-size: 15px;
+}
+
+.list-node > span {
+    display: grid;
+    place-items: center;
+    padding: 0 6px;
+    white-space: nowrap;
+}
+
+.list-node > span + span {
+    border-left: 1px solid var(--pencil-muted);
+    color: var(--pencil-faint);
+    font-size: 12px;
+    padding: 0;
+}
+
+.list-node.added {
+    border: 2px solid var(--ink);
+    background: color-mix(in srgb, var(--ink) 22%, transparent);
+    color: var(--ink);
+    font-weight: 700;
+}
+
+.list-node.written {
+    border: 2px solid var(--write);
+    font-weight: 700;
+}
+
+.list-node.reading {
+    border: 2px dashed var(--highlighter);
+    font-weight: 700;
+}
+
+.list-arrow {
+    position: relative;
+    flex: none;
+    width: 40px;
+    height: 44px;
+    color: var(--pencil-muted);
+}
+
+.list-arrow::before {
+    content: "";
+    position: absolute;
+    left: -8px;
+    right: 6px;
+    top: 21px;
+    border-top: 1.5px solid currentColor;
+}
+
+.list-arrow::after {
+    content: "";
+    position: absolute;
+    right: 0;
+    top: 17px;
+    border: 5px solid transparent;
+    border-left: 6px solid currentColor;
+    border-right: 0;
+}
+
+.list-gap {
+    align-self: flex-end;
+    line-height: 44px;
+    padding: 0 4px;
+}
+
+.list-back {
+    position: absolute;
+    height: 12px;
+    box-sizing: border-box;
+    border: 1.5px solid var(--pencil-muted);
+    border-top: 0;
+    border-radius: 0 0 6px 6px;
+}
+
+.list-back::before {
+    content: "";
+    position: absolute;
+    left: -6px;
+    top: -6px;
+    border: 5px solid transparent;
+    border-bottom: 6px solid var(--pencil-muted);
+    border-top: 0;
+}
+
 /* The queue above Auto's graph or grid in BFS. */
 .queue-companion {
     margin-bottom: 12px;

@@ -68,6 +68,7 @@ const RENDERER_LABELS = {
     graph: "Graph",
     stack: "Stack",
     queue: "Queue",
+    linked_list: "Linked list",
     recursion_tree: "Recursion tree",
     call_tree: "Call chain",
     execution: "Current line",
@@ -1616,6 +1617,7 @@ function renderAlgorithm(visualization) {
         graph: renderGraphAlgorithm,
         stack: renderStackAlgorithm,
         queue: renderQueueAlgorithm,
+        linked_list: renderLinkedListAlgorithm,
         recursion_tree: renderRecursionTreeAlgorithm,
         call_tree: renderCallTreeAlgorithm,
         execution: renderExecutionAlgorithm,
@@ -1963,19 +1965,85 @@ function queueCompanion(view) {
     return box;
 }
 
-function containerMeta(view) {
+function containerMeta(view, size = `size ${view.size}`) {
     const meta = document.createElement("div");
     meta.className = "algorithm-meta";
-    const summary = textSpan(`${view.name}, size ${view.size}${view.carried ? ", last known state" : ""}`, "");
+    const summary = textSpan(`${view.name}, ${size}${view.carried ? ", last known state" : ""}`, "");
     if (view.carried) summary.dataset.term = "last known state";
     const details = document.createElement("div");
     details.className = "algorithm-meta-details";
     const legend = [];
     if (view.reading?.length) legend.push(["reading", "Reading"]);
     if (view.added?.length) legend.push(["added", "New"]);
+    if (view.written?.length) legend.push(["written", "Written"]);
     if (legend.length) details.append(algorithmLegend(legend));
     meta.append(summary, details);
     return meta;
+}
+
+// Linked List view (mockup approved 2026-11-11): one row per chain the backend found, each
+// node `[value | •]` with its pointer variables above it; `∅` ends a list, a cycle gets a
+// line back under the row, `… N …` is the folded middle of a long list.
+function renderLinkedListAlgorithm(view) {
+    if (!view.ready) {
+        renderAlgorithmWaiting("Waiting for a linked list node to appear…");
+        return;
+    }
+    elements.algorithmView.append(containerMeta(view, `${view.size}${view.partial ? "+" : ""} node${view.size === 1 && !view.partial ? "" : "s"}`));
+    const rows = (view.rows || []).map((row) => {
+        const line = document.createElement("div");
+        line.className = "list-view";
+        const boxes = {};
+        row.items.forEach((item, position) => {
+            if (position) line.append(listArrow());
+            if (item.gap) {
+                line.append(textSpan(`… ${item.gap} …`, "container-tag list-gap"));
+                return;
+            }
+            const wrap = document.createElement("div");
+            wrap.className = "list-node-wrap";
+            const pointers = document.createElement("div");
+            pointers.className = "list-pointers";
+            if (item.pointers.length) pointers.append(textSpan(item.pointers.join(", "), "container-tag is-strong"), textSpan("↓", "container-tag"));
+            const node = document.createElement("div");
+            node.className = "list-node";
+            ["added", "written", "reading"].forEach((mark) => {
+                if ((view[mark] || []).includes(item.id)) node.classList.add(mark);
+            });
+            const last = position === row.items.length - 1;
+            node.append(textSpan(item.text, ""), textSpan(last && row.end.kind === "none" ? "∅" : "•", ""));
+            node.title = item.text;
+            wrap.append(pointers, node);
+            line.append(wrap);
+            boxes[item.id] = node;
+        });
+        if (row.end.kind === "more") line.append(listArrow(), textSpan("…", "container-tag list-gap"));
+        if (row.end.kind === "joins") line.append(listArrow(), textSpan(`${row.end.text} (another row)`, "container-tag list-gap"));
+        return {row, line, boxes};
+    });
+    elements.algorithmView.append(...rows.map(({line}) => line));
+    // A cycle: a line from the last node back under the row to the node it links to.
+    rows.forEach(({row, line, boxes}) => {
+        if (row.end.kind !== "cycle") return;
+        const nodes = Object.values(boxes);
+        const from = nodes[nodes.length - 1];
+        const to = boxes[row.end.to];
+        if (!from || !to) return;
+        const back = document.createElement("div");
+        back.className = "list-back";
+        const left = to.offsetLeft + to.offsetWidth / 2;
+        back.style.left = `${left}px`;
+        back.style.width = `${Math.max(12, from.offsetLeft + from.offsetWidth - 11 - left)}px`;
+        back.style.top = `${to.offsetTop + to.offsetHeight}px`;
+        line.append(back);
+    });
+}
+
+function listArrow() {
+    const arrow = document.createElement("span");
+    arrow.className = "list-arrow";
+    arrow.setAttribute("aria-hidden", "true");
+    return arrow;
 }
 
 function containerCell(view, entry) {

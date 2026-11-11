@@ -6,6 +6,7 @@ from dataclasses import dataclass, replace
 from typing import Any, Callable, Iterable
 
 from .containers import container_kinds, container_model, queue_companion
+from .linked_list import linked_list_model
 from .loops import loop_jumps, loop_ranges
 from .recursion import build_recursion_tree
 from .serializer import MAX_ITEMS
@@ -140,6 +141,9 @@ def analyze_execution(
 
     # Every view the user can pick is computed up front, so switching views needs no re-run.
     catalog = _view_catalog(scopes, steps, set(extra_views), kinds)
+    linked = next((view["variable"] for view in catalog if view["renderer"] == "linked_list"), None)
+    if linked and profile.renderer in {"array", "execution"}:
+        profile = AlgorithmProfile("linked_list", "Linked list", "linked_list", 0.9, (f"nodes linked by next from {linked}",), (linked,))
     source_lines = source.split("\n")
     recursion_tree, recursion_steps = (
         build_recursion_tree(steps, language)
@@ -298,7 +302,7 @@ def _after_line(mine: dict[str, Any], after: dict[str, Any], after_index: int) -
     if mine.get("renderer") == "execution" or after.get("renderer") != mine.get("renderer"):
         return mine
     shown = {**after, "at_step": after_index}
-    if mine.get("renderer") in {"graph", "stack", "queue"}:
+    if mine.get("renderer") in {"graph", "stack", "queue", "linked_list"}:
         # What the line reads (`dis[n]`, `q.front()`) is read before it runs, so it is this step's.
         shown["reading"] = mine.get("reading", [])
     if mine.get("container") and after.get("container"):
@@ -436,7 +440,7 @@ VISITED_LIKE_NAMES = frozenset(
 REACHED_GRID_NAMES = ("mov", "move", "moves", "back", "from", "pre", "prev", "par", "parent", "dist", "dis", "d", "step", "steps")
 FRONTIER_NAMES = frozenset({"q", "queue", "que", "pq", "st", "stack", "frontier", "dq"})
 MAX_VIEW_VARIABLES = 6
-_VARIABLE_RENDERERS = ("grid", "array", "cells", "graph", "stack", "queue")
+_VARIABLE_RENDERERS = ("grid", "array", "cells", "graph", "stack", "queue", "linked_list")
 
 
 def _view_catalog(
@@ -473,6 +477,12 @@ def _view_catalog(
                 add("graph", name)
             if isinstance(value, list) and name in (kinds or {}):
                 add(kinds[name], name)
+            if isinstance(value, _ObjectFields) and "next" in value and found["linked_list"] in ([], ["self"]) and name != "self":
+                # One view draws every chain, labelled with all its pointer variables; it is named
+                # after the first real variable (`head`), `self` only when nothing else points.
+                found["linked_list"] = [name]
+            elif isinstance(value, _ObjectFields) and "next" in value and not found["linked_list"]:
+                add("linked_list", name)
 
     catalog = []
     for renderer in _VARIABLE_RENDERERS:
@@ -510,6 +520,8 @@ def _view_model(
         return _graph_visualization(scope, name, profile.pair_vertex)
     if renderer in {"stack", "queue"}:
         return container_model(renderer, name, scope.get(name), line_text, language)
+    if renderer == "linked_list":
+        return linked_list_model(step, line_text, language)
     if renderer == "recursion_tree":
         return {"renderer": "recursion_tree", **(recursion_state or {"current": None, "uses": []})}
     if renderer == "call_tree":
@@ -544,7 +556,7 @@ def _carry(
         carried["markers"] = []
     elif renderer == "graph":
         carried["current"] = None
-    elif renderer in {"stack", "queue"}:
+    elif renderer in {"stack", "queue", "linked_list"}:
         carried["reading"] = []
     carried.pop("container", None)
     return carried
@@ -564,7 +576,16 @@ def _mark_writes(
     only moved down are not marked either.
     """
     renderer = model.get("renderer")
-    if renderer not in {"grid", "array", "cells", "stack", "queue"}:
+    if renderer not in {"grid", "array", "cells", "stack", "queue", "linked_list"}:
+        return
+    if renderer == "linked_list":
+        # Nodes by identity: a new node is `added` (the first one too), a changed value written.
+        if not model.get("ready") or model.get("carried"):
+            model["written"] = []
+            return
+        old = previous.get("values", {}) if previous and previous.get("ready") else {}
+        model["added"] = [node for node in model["values"] if node not in old]
+        model["written"] = [node for node, text in model["values"].items() if node in old and old[node] != text]
         return
     comparable = (
         model.get("ready")
@@ -1031,6 +1052,8 @@ def _visualization_for(
         return _graph_visualization(scope, None, profile.pair_vertex)
     if profile.renderer in {"stack", "queue"}:
         return container_model(profile.renderer, profile.focus[0], scope.get(profile.focus[0]), line_text, language)
+    if profile.renderer == "linked_list":
+        return linked_list_model(step, line_text, language)
     if profile.renderer == "call_tree":
         return _call_tree_visualization(step)
     return _execution_visualization(step)

@@ -20,6 +20,8 @@ class SerializationContext:
     seen: set[int] = field(default_factory=set)
     max_depth: int = MAX_DEPTH
     max_items: int = MAX_ITEMS
+    # Links followed without going a level deeper (`node.next`), shared by the whole step.
+    links: int = 0
 
 
 def serialize_locals(
@@ -131,13 +133,17 @@ def _serialize_instance(
         result["truncated"] = True
         return result
     names = [name for name in fields if not name.startswith("__")]
-    result["entries"] = [
-        {
-            "key": {"type": "str", "value": name},
-            "value": serialize_value(fields[name], context=context, depth=depth + 1),
-        }
-        for name in names[: context.max_items]
-    ]
+    entries = []
+    for name in names[: context.max_items]:
+        field_value = fields[name]
+        child_depth = depth + 1
+        if type(field_value) is type(value) and context.links < context.max_items:
+            # A node's `next` (or `left`) is not a level deeper, so a whole linked list is read,
+            # up to `max_items` links per step.
+            context.links += 1
+            child_depth = depth
+        entries.append({"key": {"type": "str", "value": name}, "value": serialize_value(field_value, context=context, depth=child_depth)})
+    result["entries"] = entries
     if len(names) > context.max_items:
         result["truncated"] = True
     return result
