@@ -172,6 +172,7 @@ def run_cpp_debugger(
     timeout_seconds: float = 3.0,
     max_steps: int = 5_000,
     extra_views: Iterable[str] = (),
+    choice: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     compiler = shutil.which("g++")
     debugger = shutil.which("gdb")
@@ -282,7 +283,7 @@ def run_cpp_debugger(
         "capped": capped,
         "loop_stop_limit": MAX_LOOP_LINE_STOPS,
     }
-    result["algorithm"] = analyze_execution(source, steps, language="cpp", extra_views=extra_views)
+    result["algorithm"] = analyze_execution(source, steps, language="cpp", extra_views=extra_views, choice=choice)
     return result
 
 

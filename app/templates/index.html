@@ -51,7 +51,7 @@
                 <button id="edit-button" class="button secondary hidden" type="button">Edit code</button>
                 <button id="run-button" class="button primary" type="button">
                     <span class="run-icon" aria-hidden="true">▶</span>
-                    Run
+                    <span class="run-label">Run</span>
                 </button>
             </div>
         </header>
@@ -148,6 +148,19 @@ main()</textarea>
                         <div id="algorithm-inputs" class="algorithm-inputs" aria-label="Input values" data-term="Input values" hidden></div>
                         <div id="algorithm-view" class="algorithm-canvas empty-state">
                             Run the program to see its data structure drawn here.
+                        </div>
+                        <div id="algorithm-chooser" class="algorithm-chooser" hidden>
+                            <h3 class="chooser-title">這個程式在做什麼？</h3>
+                            <p class="chooser-hint">選一個，按 Run 之後右邊就照這個畫。</p>
+                            <div id="chooser-groups" class="chooser-groups"></div>
+                            <div id="chooser-variables" class="chooser-variables" hidden>
+                                <span>要畫的變數：</span>
+                                <span id="chooser-slots" class="chooser-slots"></span>
+                            </div>
+                            <button id="chooser-run-button" class="button primary chooser-run" type="button" disabled>
+                                <span class="run-icon" aria-hidden="true">▶</span>
+                                <span class="run-label">Run</span>
+                            </button>
                         </div>
                     </section>
 

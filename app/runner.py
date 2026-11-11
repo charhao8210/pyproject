@@ -34,6 +34,7 @@ def run_debugger(
     timeout_seconds: float | None = None,
     max_steps: int = DEFAULT_MAX_STEPS,
     extra_views: Iterable[str] = (),
+    choice: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if timeout_seconds is None:
         timeout_seconds = CPP_TIMEOUT_SECONDS if language == "cpp" else DEFAULT_TIMEOUT_SECONDS
@@ -47,6 +48,7 @@ def run_debugger(
                 timeout_seconds=timeout_seconds,
                 max_steps=max_steps,
                 extra_views=extra_views,
+                choice=choice,
             )
         except CppExecutionTimeoutError as error:
             raise ExecutionTimeoutError(str(error)) from error
@@ -118,7 +120,7 @@ def run_debugger(
 
     result["language"] = "python"
     _mark_exception_origin(result["steps"])
-    result["algorithm"] = analyze_execution(source, result["steps"], language="python", extra_views=extra_views)
+    result["algorithm"] = analyze_execution(source, result["steps"], language="python", extra_views=extra_views, choice=choice)
     return result
 
 

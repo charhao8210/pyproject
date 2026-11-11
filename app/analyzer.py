@@ -5,6 +5,7 @@ import re
 from dataclasses import dataclass, replace
 from typing import Any, Callable, Iterable
 
+from .chooser import CHOICES
 from .containers import container_kinds, container_model, queue_companion
 from .linked_list import linked_list_model
 from .loops import loop_jumps, loop_ranges
@@ -120,7 +121,10 @@ def analyze_execution(
     *,
     language: str = "python",
     extra_views: Iterable[str] = (),
+    choice: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """`choice` is what the user picked before Run (`chooser.CHOICES`): its views are drawn as
+    picked instead of guessed, and a picked variable without data says so (`missing`)."""
     decoded: dict[int, Any] = {}
     scopes = [_decode_scope(step, decoded) for step in steps]
     shapes = _runtime_shapes(scopes, _edge_id_lists(source))
@@ -144,6 +148,10 @@ def analyze_execution(
     linked = next((view["variable"] for view in catalog if view["renderer"] == "linked_list"), None)
     if linked and profile.renderer in {"array", "execution"}:
         profile = AlgorithmProfile("linked_list", "Linked list", "linked_list", 0.9, (f"nodes linked by next from {linked}",), (linked,))
+    chosen = choice if choice and choice.get("algorithm") in CHOICES and choice["algorithm"] != "other" else None
+    plan = _choice_plan(chosen, scopes, catalog) if chosen else None
+    if plan:
+        profile = replace(profile, kind=chosen["algorithm"], name=plan["label"], renderer=plan["renderer"], confidence=1.0, evidence=())
     source_lines = source.split("\n")
     recursion_tree, recursion_steps = (
         build_recursion_tree(steps, language)
@@ -166,8 +174,12 @@ def analyze_execution(
         step["loop"] = loops[index]
         step["inputs"] = inputs[index]
         line_text = _line_text(step, source_lines, language)
-        automatic = _visualization_for(profile, scope, step, extents, line_text, language)
-        if profile.renderer == "call_tree" and recursion_steps and recursion_tree and recursion_tree["nodes"]:
+        if plan:
+            recursion_state = recursion_steps[index] if recursion_steps else None
+            automatic = _chosen_model(plan, profile, scope, step, recursion_state, language, extents, line_text)
+        else:
+            automatic = _visualization_for(profile, scope, step, extents, line_text, language)
+        if not plan and profile.renderer == "call_tree" and recursion_steps and recursion_tree and recursion_tree["nodes"]:
             # A function calling itself reads best as its recursion tree: every call with its
             # arguments (`fib(4)`, `fib(3)`) and returned value, not a chain of bare `fib()`.
             automatic = {"renderer": "recursion_tree", "ready": True, **recursion_steps[index]}
@@ -178,7 +190,11 @@ def analyze_execution(
         _mark_infinite(visualization, sentinels, spells_infinity)
         if visualization.get("renderer") in {"graph", "grid"} and visualization.get("ready") and not visualization.get("carried"):
             # BFS: Auto draws the queue above the graph or grid (the user's layout).
-            companion = queue_companion(visualization, scope, kinds, line_text, language)
+            companion = (
+                _chosen_companion(plan, scope, line_text, language)
+                if plan
+                else queue_companion(visualization, scope, kinds, line_text, language)
+            )
             if companion is not None:
                 _mark_writes(companion, (previous.get(AUTO_VIEW) or {}).get("container"), scope, previous_scope)
                 visualization = {**visualization, "container": companion, "uses": _unique_names([*visualization.get("uses", []), companion["name"]])}
@@ -202,9 +218,12 @@ def analyze_execution(
     _orient_graphs(steps)
     _show_line_effects(steps)
 
+    if plan and not _choice_drawn(plan, steps):
+        for step in steps:
+            step["visualization"] = {"renderer": plan["renderer"], "ready": False, "missing": plan["name"], "uses": []}
     # The profile can name a renderer whose data never shows up (a 1D `dp` for a
     # "DP table"); Auto then falls back to the first view that draws something.
-    if not any(step["visualization"].get("ready") for step in steps):
+    if not plan and not any(step["visualization"].get("ready") for step in steps):
         fallback = next(
             (
                 view["id"]
@@ -230,6 +249,8 @@ def analyze_execution(
     )
     if recursion_tree is not None:
         result["recursion_tree"] = recursion_tree
+    if plan:
+        result["choice"] = {"algorithm": chosen["algorithm"], "label": plan["label"], "variables": plan["variables"]}
     if language == "cpp":
         result["method"] = "C++ source and runtime-state heuristics"
     return result
@@ -423,6 +444,87 @@ def _loop_written_arrays(source: str, language: str) -> tuple[str, ...]:
             name = match.group(1)
             depth_of[name] = max(depth_of.get(name, 0), depth)
     return tuple(sorted(depth_of, key=lambda name: -depth_of[name]))
+
+
+def _choice_plan(choice: dict[str, Any], scopes: list[dict[str, Any]], catalog: list[dict[str, Any]]) -> dict[str, Any]:
+    """What a picked algorithm draws: its main renderer and variable, the container drawn
+    above a graph (BFS queue, DFS stack) and the per-vertex array (shortest path)."""
+    algorithm = choice["algorithm"]
+    label, slots = CHOICES[algorithm]
+    picked = {slot: str((choice.get("variables") or {}).get(slot) or "") for slot in slots}
+    plan: dict[str, Any] = {
+        "label": label,
+        "variables": [picked[slot] for slot in slots if picked[slot]],
+        "companion": None,
+        "labels": None,
+    }
+
+    def values(name: str) -> list[Any]:
+        return [scope[name] for scope in scopes if name in scope]
+
+    if algorithm in {"array", "sorting"}:
+        name = picked["array"]
+        numeric = any(_numeric_array_projection(value) is not None for value in values(name))
+        # A list of words or pairs cannot be bars; its cells still show it.
+        renderer = "cells" if not numeric and any(isinstance(value, list) for value in values(name)) else "array"
+        return {**plan, "renderer": renderer, "name": name}
+    if algorithm in {"stack", "queue"}:
+        return {**plan, "renderer": algorithm, "name": picked[algorithm]}
+    if algorithm == "linked_list":
+        return {**plan, "renderer": "linked_list", "name": picked["node"]}
+    if algorithm == "recursion":
+        has_tree = any(view["renderer"] == "recursion_tree" for view in catalog)
+        return {**plan, "renderer": "recursion_tree", "name": "recursion" if has_tree else ""}
+    name = picked["graph"]
+    adjacency = any(_is_adjacency(value, name) for value in values(name))
+    renderer = "grid" if not adjacency and any(_is_grid(value) for value in values(name)) else "graph"
+    if algorithm == "bfs" and picked["queue"]:
+        plan["companion"] = ("queue", picked["queue"])
+    elif algorithm == "dfs" and picked["stack"]:
+        plan["companion"] = ("stack", picked["stack"])
+    elif algorithm == "shortest_path" and picked["distance"]:
+        plan["labels"] = picked["distance"]
+    return {**plan, "renderer": renderer, "name": name}
+
+
+def _chosen_model(
+    plan: dict[str, Any],
+    profile: AlgorithmProfile,
+    scope: dict[str, Any],
+    step: dict[str, Any],
+    recursion_state: dict[str, Any] | None,
+    language: str,
+    extents: dict[str, tuple[int, int]],
+    line_text: str,
+) -> dict[str, Any]:
+    renderer, name = plan["renderer"], plan["name"]
+    if not name:
+        return {"renderer": renderer, "ready": False}
+    if renderer == "graph":
+        return _graph_visualization(scope, name, profile.pair_vertex, plan["labels"])
+    if renderer == "recursion_tree":
+        if recursion_state is None:
+            return {"renderer": renderer, "ready": False}
+        return {"renderer": renderer, "ready": True, **recursion_state}
+    view = {"renderer": renderer, "variable": name}
+    return _view_model(view, profile, scope, step, recursion_state, language, extents, line_text)
+
+
+def _chosen_companion(plan: dict[str, Any], scope: dict[str, Any], line_text: str, language: str) -> dict[str, Any] | None:
+    if not plan["companion"]:
+        return None
+    kind, name = plan["companion"]
+    if not isinstance(scope.get(name), list):
+        return None
+    return container_model(kind, name, scope[name], line_text, language)
+
+
+def _choice_drawn(plan: dict[str, Any], steps: list[dict[str, Any]]) -> bool:
+    """Whether the picked variable is drawn at some step. A linked list draws every chain, so
+    there the picked pointer must be one of its labels."""
+    if plan["renderer"] == "linked_list":
+        return any(plan["name"] in step["visualization"].get("uses", []) for step in steps if step["visualization"].get("ready"))
+    return any(step["visualization"].get("ready") for step in steps)
 
 
 AUTO_VIEW = "auto"
@@ -1529,6 +1631,7 @@ def _graph_visualization(
     scope: dict[str, Any],
     graph_name: str | None = None,
     vertex_position: int | None = None,
+    label_name: str | None = None,
 ) -> dict[str, Any]:
     for name, value in _named_values(scope, graph_name, ("graph", "g", "adj", "adjacency")):
         if not _is_adjacency(value, name) or (graph_name is None and name.lower() in NOT_A_GRAPH_NAMES):
@@ -1592,7 +1695,11 @@ def _graph_visualization(
         if checking is not None and current_name is None:
             current_name, current = checking["from_name"], checking["source"]
         frontier_name, frontier, frontier_entries = _graph_frontier(scope, node_ids)
-        label_name, labels = _graph_labels(scope, numeric_nodes, {name} if visited_name in GRAPH_LABEL_NAMES else {name, visited_name})
+        if label_name is not None:
+            # Picked before Run (shortest path): that array, even when it also marks visits.
+            label_name, labels = _graph_labels(scope, numeric_nodes, {name}, (label_name,))
+        else:
+            label_name, labels = _graph_labels(scope, numeric_nodes, {name} if visited_name in GRAPH_LABEL_NAMES else {name, visited_name})
         parents = _tree_parents(node_values, edges)
         route_name, route = _graph_route(scope, node_ids, edges, current)
         return {

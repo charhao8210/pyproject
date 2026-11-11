@@ -8,7 +8,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from .cpp_runner import CppCompilationError, CppToolchainError
-from .models import DebugRequest, DebugResponse
+from .chooser import slot_candidates
+from .models import CandidatesRequest, DebugRequest, DebugResponse
 from .runner import ExecutionTimeoutError, WorkerExecutionError, run_debugger
 from .validator import SourceValidationError
 
@@ -53,6 +54,12 @@ async def help_page(request: Request) -> HTMLResponse:
     return response
 
 
+@app.post("/api/candidates")
+def candidates(payload: CandidatesRequest) -> dict:
+    """Variables of the code that fit each chooser slot, read before Run (nothing runs)."""
+    return {"slots": slot_candidates(payload.code, payload.language)}
+
+
 @app.post("/api/debug", response_model=DebugResponse)
 def debug_code(payload: DebugRequest) -> dict:
     try:
@@ -61,6 +68,7 @@ def debug_code(payload: DebugRequest) -> dict:
             stdin_text=payload.stdin,
             language=payload.language,
             extra_views=payload.views,
+            choice=payload.choice.model_dump() if payload.choice else None,
         )
     except SourceValidationError as error:
         raise HTTPException(

@@ -48,7 +48,8 @@
     --grid-lines:
         linear-gradient(to right, var(--rule-faint) 1px, transparent 1px) 0 0 / 20px 20px,
         linear-gradient(to bottom, var(--rule-faint) 1px, transparent 1px) 0 0 / 20px 20px;
-    --radius: 3px;
+    --radius: 8px;
+    --radius-panel: 12px;
     --line: 26px;
     --gutter: 52px;
     --mono: "Atkinson Hyperlegible Mono", "Cascadia Code", Consolas, "Microsoft JhengHei", monospace;
@@ -534,7 +535,7 @@ body.is-resizing-rows {
     overflow: hidden;
     flex-direction: column;
     border: 1px solid var(--rule);
-    border-radius: var(--radius);
+    border-radius: var(--radius-panel);
     background: var(--sheet);
 }
 
@@ -2548,4 +2549,183 @@ a.button {
     border: 2px dashed var(--highlighter);
     color: var(--pencil);
     font-weight: 700;
+}
+
+/* Algorithm chooser before Run (mockup approved 2026-11-11): rounded cards with a line icon and
+   a one-line hint; the picked card is tinted yellow with a yellow ring, "Other" is outlined only. */
+.right-column.is-choosing > .variables-panel,
+.right-column.is-choosing > .output-panel,
+.right-column.is-choosing > .row-resizer,
+.right-column.is-choosing .algorithm-canvas,
+.right-column.is-choosing .algorithm-inputs {
+    display: none;
+}
+
+.right-column.is-choosing > .algorithm-panel {
+    flex: 1 1 0;
+}
+
+.algorithm-chooser {
+    display: flex;
+    min-height: 0;
+    flex: 1 1 auto;
+    flex-direction: column;
+    gap: 10px;
+    overflow: auto;
+    padding: 18px 24px 24px;
+    background: var(--grid-lines), var(--sheet);
+}
+
+.algorithm-chooser[hidden],
+.chooser-variables[hidden],
+.algorithm-panel.is-collapsed .algorithm-chooser {
+    display: none;
+}
+
+.chooser-title {
+    margin: 0;
+    color: var(--pencil);
+    font-size: 17px;
+}
+
+.chooser-hint {
+    margin: -4px 0 4px;
+    color: var(--pencil-muted);
+    font-size: 13px;
+}
+
+.chooser-groups {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.chooser-group {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.chooser-group-name {
+    color: var(--pencil-faint);
+    font-size: 12px;
+}
+
+.chooser-cards {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+}
+
+.chooser-card {
+    display: flex;
+    min-height: 62px;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 14px;
+    border: 2px solid transparent;
+    border-radius: 12px;
+    color: var(--pencil);
+    background: var(--sheet-raised);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.chooser-card:hover {
+    border-color: var(--rule);
+}
+
+.chooser-card.is-other {
+    border: 1px dashed var(--rule);
+    background: transparent;
+}
+
+.chooser-card[aria-pressed="true"] {
+    border: 2px solid var(--highlighter);
+    background: color-mix(in srgb, var(--highlighter) 16%, var(--sheet-raised));
+}
+
+.chooser-card:focus-visible,
+.chooser-select:focus-visible {
+    outline: 2px solid var(--ink);
+    outline-offset: 2px;
+}
+
+.chooser-icon {
+    width: 26px;
+    height: 26px;
+    flex: none;
+    fill: none;
+    stroke: var(--pencil-muted);
+    stroke-width: 1.6;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+.chooser-card[aria-pressed="true"] .chooser-icon {
+    stroke: var(--highlighter);
+}
+
+.chooser-text {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.chooser-card-label {
+    font-size: 14px;
+    font-weight: 700;
+}
+
+.chooser-card-hint {
+    color: var(--pencil-muted);
+    font-size: 12px;
+}
+
+.chooser-warning {
+    color: var(--tle);
+}
+
+.chooser-variables {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin-top: 6px;
+    padding-top: 14px;
+    border-top: 1px solid var(--rule);
+    color: var(--pencil-muted);
+    font-size: 13px;
+}
+
+.chooser-slots {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+}
+
+.chooser-select {
+    min-height: 30px;
+    padding: 0 8px;
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    color: var(--pencil);
+    background: var(--sheet-raised);
+    font-family: var(--mono);
+    font-weight: 700;
+}
+
+.chooser-run {
+    align-self: flex-start;
+    margin-top: 6px;
+    padding: 0 22px;
+    border-radius: 999px;
+}
+
+/* A yellow line on the pale yellow card is too faint in the light theme. */
+:root[data-theme="light"] .chooser-card[aria-pressed="true"] .chooser-icon {
+    stroke: var(--pencil);
 }

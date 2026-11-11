@@ -54,6 +54,14 @@ const state = {
         timer: null,
         speed: 1,
     },
+    // The algorithm picked in the chooser, `{algorithm, variables: {slot: name}}`, per language;
+    // `choice` is the current language's. Nothing is picked until the user clicks a card.
+    choice: null,
+    choices: {python: null, cpp: null},
+    // Slot → candidate variable names for the code in the editor (`/api/candidates`).
+    candidates: {},
+    candidatesTimer: null,
+    running: false,
     // The view the user picked; it is kept across runs and applied whenever the new trace offers it.
     view: {
         renderer: "auto",
@@ -73,6 +81,56 @@ const RENDERER_LABELS = {
     call_tree: "Call chain",
     execution: "Current line",
 };
+
+// The algorithm chooser shown before Run (mockup approved 2026-11-11): the user says what the
+// program does instead of the page guessing. The backend lists each slot's candidate variables
+// (`/api/candidates`) and draws the choice (`DebugRequest.choice`); this only shows them.
+const CHOICE_ICONS = {
+    bars: '<path d="M5 19v-6M9 19v-9M13 19v-4M17 19v-11"/>',
+    sorted: '<path d="M5 19v-3M9 19v-6M13 19v-9M17 19v-12"/>',
+    stack: '<rect x="6" y="3.5" width="12" height="4.5" rx="1.5"/><rect x="6" y="9.75" width="12" height="4.5" rx="1.5"/><rect x="6" y="16" width="12" height="4.5" rx="1.5"/>',
+    queue: '<rect x="2.5" y="9" width="5.5" height="6" rx="1"/><rect x="9.25" y="9" width="5.5" height="6" rx="1"/><rect x="16" y="9" width="5.5" height="6" rx="1"/>',
+    list: '<rect x="2" y="9" width="6" height="6" rx="1"/><path d="M8 12h3"/><rect x="11" y="9" width="6" height="6" rx="1"/><path d="M17 12h3"/><circle cx="21" cy="12" r="1"/>',
+    bfs: '<circle cx="12" cy="5" r="2"/><circle cx="6" cy="18" r="2"/><circle cx="18" cy="18" r="2"/><path d="M11 6.8 7 16.2M13 6.8l4 9.4"/>',
+    dfs: '<circle cx="17" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="7" cy="19" r="2"/><path d="m15.6 6.4-2.2 4.2M10.6 13.4l-2.2 4.2"/>',
+    path: '<circle cx="4" cy="15" r="2"/><circle cx="12" cy="8" r="2"/><circle cx="20" cy="15" r="2"/><path d="M5.6 13.6 10.4 9.4M13.6 9.4l4.8 4.2M6 15h12"/>',
+    tree: '<circle cx="12" cy="4.5" r="2"/><circle cx="7" cy="12" r="2"/><circle cx="17" cy="12" r="2"/><circle cx="4" cy="19.5" r="2"/><circle cx="10" cy="19.5" r="2"/><path d="m10.9 6.2-2.8 4.1M13.1 6.2l2.8 4.1M6 13.7l-1.1 4M8 13.7l1.1 4"/>',
+    other: '<path d="M9.5 9a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6V14"/><circle cx="12" cy="18" r=".6"/>',
+};
+const ALGORITHM_CHOICES = [
+    {group: "陣列", items: [
+        {id: "array", label: "Array simulation", hint: "陣列逐格變化", icon: "bars"},
+        {id: "sorting", label: "Sorting", hint: "比較與交換", icon: "sorted"},
+    ]},
+    {group: "資料結構", items: [
+        {id: "stack", label: "Stack", hint: "push / pop，top 在上", icon: "stack"},
+        {id: "queue", label: "Queue", hint: "front 出、back 進", icon: "queue"},
+        {id: "linked_list", label: "Linked List", hint: "節點與 next 箭頭", icon: "list"},
+    ]},
+    {group: "圖", items: [
+        {id: "bfs", label: "BFS", hint: "圖或迷宮 + 上方 queue", icon: "bfs"},
+        {id: "dfs", label: "DFS", hint: "遞迴或 stack 走訪", icon: "dfs"},
+        {id: "shortest_path", label: "Shortest path", hint: "距離標在節點旁", icon: "path"},
+    ]},
+    {group: "其他", items: [
+        {id: "recursion", label: "Recursion", hint: "遞迴樹", icon: "tree"},
+        {id: "other", label: "Other", hint: "讓程式自己猜，", warning: "可能畫得不好", icon: "other"},
+    ]},
+];
+// Each choice's slots in order: [slot, the word printed after its select].
+const CHOICE_SLOTS = {
+    array: [["array", "陣列"]],
+    sorting: [["array", "陣列"]],
+    stack: [["stack", "stack"]],
+    queue: [["queue", "queue"]],
+    linked_list: [["node", "節點指標"]],
+    bfs: [["graph", "圖或迷宮"], ["queue", "queue"]],
+    dfs: [["graph", "圖或迷宮"], ["stack", "stack"]],
+    shortest_path: [["graph", "圖"], ["distance", "距離"]],
+    recursion: [],
+    other: [],
+};
+const CHOICE_LABELS = Object.fromEntries(ALGORITHM_CHOICES.flatMap((group) => group.items).map((item) => [item.id, item.label]));
 
 const STORAGE_PREFIX = "code-visual-debugger";
 // At 1× speed, autoplay advances this many steps per second.
@@ -125,12 +183,18 @@ const elements = {
     previousButton: document.querySelector("#previous-button"),
     nextButton: document.querySelector("#next-button"),
     loopEndButton: document.querySelector("#loop-end-button"),
+    chooser: document.querySelector("#algorithm-chooser"),
+    chooserGroups: document.querySelector("#chooser-groups"),
+    chooserVariables: document.querySelector("#chooser-variables"),
+    chooserSlots: document.querySelector("#chooser-slots"),
+    chooserRunButton: document.querySelector("#chooser-run-button"),
 };
 
 const containerTypes = new Set(["list", "tuple", "dict", "set", "frozenset", "object"]);
 const SVG_NS = "http://www.w3.org/2000/svg";
 
 elements.runButton.addEventListener("click", runCode);
+elements.chooserRunButton.addEventListener("click", runCode);
 elements.editButton.addEventListener("click", showEditor);
 elements.languageSelect.addEventListener("change", changeLanguage);
 elements.themeButton.addEventListener("click", () => setTheme(currentTheme() === "dark" ? "light" : "dark"));
@@ -162,6 +226,7 @@ elements.editor.addEventListener("input", () => {
     if (state.editorErrors?.length) state.editorErrors = [];
     renderEditorHighlight();
     saveDrafts();
+    scheduleCandidates();
 });
 // The caret's line number is bold in the gutter, so follow every caret move, not only edits.
 document.addEventListener("selectionchange", () => {
@@ -217,6 +282,10 @@ setupPanelToggles();
 state.drafts.python = elements.editor.value;
 state.stdinDrafts.python = elements.stdinEditor.value;
 restoreDrafts();
+restoreChoices();
+renderChooser();
+showChooser(true);
+refreshCandidates();
 
 // Hovering (or focusing) anything with `data-term` shows what that word means (terms.js).
 const hoverTip = document.createElement("div");
@@ -276,15 +345,143 @@ function changeLanguage(event) {
 
     state.drafts[state.language] = elements.editor.value;
     state.stdinDrafts[state.language] = elements.stdinEditor.value;
+    state.choices[state.language] = state.choice;
     state.language = nextLanguage;
+    state.choice = state.choices[nextLanguage];
     elements.editor.value = state.drafts[nextLanguage];
     elements.stdinEditor.value = state.stdinDrafts[nextLanguage];
     saveDrafts();
     updateStdinCount();
     renderEditorHighlight();
     resetTraceView();
+    state.candidates = {};
+    renderChooser();
+    refreshCandidates();
     showEditor();
     elements.editor.focus();
+}
+
+function restoreChoices() {
+    const saved = readPreference("choices", null);
+    ["python", "cpp"].forEach((language) => {
+        const choice = saved?.[language];
+        if (choice && CHOICE_SLOTS[choice.algorithm] && typeof choice.variables === "object") {
+            state.choices[language] = {algorithm: choice.algorithm, variables: {...choice.variables}};
+        }
+    });
+    state.choice = state.choices[state.language];
+}
+
+function saveChoices() {
+    state.choices[state.language] = state.choice;
+    writePreference("choices", state.choices);
+}
+
+// Before Run the chooser fills the right column; Variables and stdout come back after Run.
+function showChooser(visible) {
+    elements.chooser.hidden = !visible;
+    elements.rightColumn.classList.toggle("is-choosing", visible);
+    updateRunButtons();
+}
+
+function renderChooser() {
+    elements.chooserGroups.replaceChildren(...ALGORITHM_CHOICES.map(({group, items}) => {
+        const section = document.createElement("div");
+        section.className = "chooser-group";
+        const heading = textSpan(group, "chooser-group-name");
+        const cards = document.createElement("div");
+        cards.className = "chooser-cards";
+        cards.append(...items.map((item) => {
+            const card = document.createElement("button");
+            card.type = "button";
+            card.className = `chooser-card${item.id === "other" ? " is-other" : ""}`;
+            card.setAttribute("aria-pressed", String(state.choice?.algorithm === item.id));
+            card.dataset.term = item.label;
+            const icon = document.createElementNS(SVG_NS, "svg");
+            icon.setAttribute("viewBox", "0 0 24 24");
+            icon.setAttribute("aria-hidden", "true");
+            icon.classList.add("chooser-icon");
+            icon.innerHTML = CHOICE_ICONS[item.icon];
+            const text = document.createElement("span");
+            text.className = "chooser-text";
+            const hint = textSpan(item.hint, "chooser-card-hint");
+            if (item.warning) hint.append(textSpan(item.warning, "chooser-warning"));
+            text.append(textSpan(item.label, "chooser-card-label"), hint);
+            card.append(icon, text);
+            card.addEventListener("click", () => pickAlgorithm(item.id));
+            return card;
+        }));
+        section.append(heading, cards);
+        return section;
+    }));
+    renderChooserSlots();
+}
+
+function pickAlgorithm(algorithm) {
+    state.choice = {algorithm, variables: {...(state.choice?.variables || {})}};
+    renderChooser();
+    saveChoices();
+}
+
+// One select per slot of the picked algorithm, filled with the backend's candidates; the
+// picked name stays while the code still has it, otherwise the most likely one is taken.
+function renderChooserSlots() {
+    const slots = state.choice ? CHOICE_SLOTS[state.choice.algorithm] : [];
+    elements.chooserVariables.hidden = !slots.length;
+    elements.chooserSlots.replaceChildren(...slots.flatMap(([slot, word]) => {
+        const names = state.candidates[slot] || [];
+        const options = names.map((name) => new Option(name, name));
+        if (state.choice.algorithm === "dfs" && slot === "stack") options.push(new Option("遞迴，沒有 stack", ""));
+        else if (!names.length) options.push(new Option("（找不到）", ""));
+        const select = document.createElement("select");
+        select.className = "chooser-select";
+        select.setAttribute("aria-label", word);
+        select.append(...options);
+        const picked = state.choice.variables[slot];
+        select.value = options.some((option) => option.value === picked) ? picked : options[0].value;
+        state.choice.variables[slot] = select.value;
+        select.addEventListener("change", () => {
+            state.choice.variables[slot] = select.value;
+            saveChoices();
+        });
+        return [select, textSpan(word, "chooser-slot-word")];
+    }));
+    updateRunButtons();
+}
+
+function updateRunButtons() {
+    const label = state.choice ? `Run as ${CHOICE_LABELS[state.choice.algorithm]}` : "Run";
+    [elements.runButton, elements.chooserRunButton].forEach((button) => {
+        button.querySelector(".run-label").textContent = label;
+        button.disabled = state.running || !state.choice;
+    });
+    elements.runButton.title = state.choice ? "" : "先在右邊選這個程式在做什麼";
+}
+
+// Candidates follow the code as it is typed, read by the backend a moment after typing stops.
+function scheduleCandidates() {
+    clearTimeout(state.candidatesTimer);
+    state.candidatesTimer = setTimeout(refreshCandidates, 400);
+}
+
+async function refreshCandidates() {
+    const code = elements.editor.value;
+    const language = state.language;
+    try {
+        const response = await fetch("/api/candidates", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({code, language}),
+        });
+        if (!response.ok) return;
+        const payload = await response.json();
+        if (code !== elements.editor.value || language !== state.language) return;
+        state.candidates = payload.slots || {};
+        renderChooserSlots();
+        if (state.choice) saveChoices();
+    } catch {
+        // The selects keep their last candidates; Run still sends the picked names.
+    }
 }
 
 function resetTraceView() {
@@ -336,7 +533,11 @@ function currentVisualization(step) {
 function configureViewSelects() {
     const renderers = [...new Set(availableViews().map((view) => view.renderer))];
     const autoRenderer = state.result?.algorithm?.auto_renderer || state.result?.algorithm?.renderer;
-    const autoLabel = autoRenderer ? `Auto (${RENDERER_LABELS[autoRenderer] || autoRenderer})` : "Auto";
+    const choice = state.result?.algorithm?.choice;
+    // A picked algorithm names the first entry after itself and its variables: `BFS (g + q)`.
+    const autoLabel = choice
+        ? `${choice.label}${choice.variables.length ? ` (${choice.variables.join(" + ")})` : ""}`
+        : autoRenderer ? `Auto (${RENDERER_LABELS[autoRenderer] || autoRenderer})` : "Auto";
     elements.viewSelect.replaceChildren(
         new Option(autoLabel, "auto"),
         ...renderers.map((renderer) => new Option(RENDERER_LABELS[renderer] || renderer, renderer)),
@@ -680,22 +881,25 @@ function stepManually(index) {
 }
 
 async function runCode() {
+    if (!state.choice || state.running) return;
     const code = elements.editor.value;
     const stdin = elements.stdinEditor.value;
     stopPlayback();
     setMessage("");
     setEditorErrors([]);
     setStatus("running", "Running");
-    elements.runButton.disabled = true;
+    state.running = true;
+    updateRunButtons();
     elements.languageSelect.disabled = true;
 
     try {
+        const run = {code, stdin, language: state.language, choice: state.choice};
         const response = await fetch("/api/debug", {
             method: "POST",
             headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({code, stdin, language: state.language}),
+            body: JSON.stringify(run),
         });
-        state.lastRun = {code, stdin, language: state.language};
+        state.lastRun = run;
         state.extraViews = [];
         const payload = await response.json();
         if (!response.ok) {
@@ -739,7 +943,8 @@ async function runCode() {
         setStatus("error", "Cannot run");
         setMessage(error instanceof Error ? error.message : String(error));
     } finally {
-        elements.runButton.disabled = false;
+        state.running = false;
+        updateRunButtons();
         elements.languageSelect.disabled = false;
     }
 }
@@ -799,6 +1004,7 @@ function showViewer() {
     elements.editorWrap.classList.add("hidden");
     elements.sourceViewer.classList.remove("hidden");
     elements.editButton.classList.remove("hidden");
+    showChooser(false);
 }
 
 function showEditor() {
@@ -806,6 +1012,8 @@ function showEditor() {
     elements.sourceViewer.classList.add("hidden");
     elements.editorWrap.classList.remove("hidden");
     elements.editButton.classList.add("hidden");
+    // Editing goes back to the chooser, so the algorithm can be changed before the next Run.
+    showChooser(true);
     elements.editor.focus();
 }
 
@@ -1589,6 +1797,13 @@ function renderAlgorithmProfile(profile) {
         evidence: [],
     };
     elements.algorithmName.textContent = algorithm.name;
+    if (algorithm.choice) {
+        elements.algorithmConfidence.textContent = "picked before Run";
+        elements.algorithmConfidence.dataset.term = "picked before Run";
+        elements.algorithmConfidence.className = "confidence-badge";
+        elements.algorithmEvidence.textContent = "";
+        return;
+    }
     // The name is a guess from code patterns; its score is a ranking, not a probability, so no
     // percentage is shown as if it were one.
     elements.algorithmConfidence.textContent = "guessed from the code";
@@ -1608,6 +1823,15 @@ function renderAlgorithm(visualization) {
     }
     if (!visualization) {
         renderAlgorithmWaiting("No visualization state is available for this step.");
+        return;
+    }
+    if ("missing" in visualization) {
+        // The picked variable never had data: say so rather than draw a guess (the user's choice).
+        renderAlgorithmWaiting(
+            visualization.renderer === "recursion_tree" ? "這次執行沒有遞迴呼叫，按 Edit code 換一個演算法。"
+                : visualization.missing ? `${visualization.missing} 在執行中沒有資料，按 Edit code 換變數。`
+                    : "程式碼裡找不到可以畫的變數，按 Edit code 換一個演算法或變數。",
+        );
         return;
     }
     const renderers = {
@@ -1961,7 +2185,7 @@ function renderQueueAlgorithm(view) {
 function queueCompanion(view) {
     const box = document.createElement("div");
     box.className = "queue-companion";
-    box.append(containerMeta(view), queueBody(view));
+    box.append(containerMeta(view), view.renderer === "stack" ? stackBody(view) : queueBody(view));
     return box;
 }
 
