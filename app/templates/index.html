@@ -175,6 +175,7 @@ main()</textarea>
                                     <span data-term="Changed by the last line"><span class="usage-swatch changed" aria-hidden="true"></span>Changed by the last line</span>
                                 </span>
                                 <span id="function-name" class="panel-meta" data-term="Function">—</span>
+                                <button id="variable-filter-button" class="panel-action" type="button" aria-expanded="false" aria-controls="variable-filter" disabled>Show ▾</button>
                                 <button class="panel-action panel-toggle" type="button" aria-expanded="true" aria-controls="variables">Hide</button>
                             </div>
                         </div>
@@ -231,5 +232,7 @@ main()</textarea>
             <span class="keyboard-hint"><kbd>←</kbd><kbd>→</kbd> step, <kbd>Space</kbd> play</span>
         </footer>
     </div>
+    <!-- Outside the panel: `.panel` clips its children. Placed under its button by app.js. -->
+    <div id="variable-filter" class="variable-filter" role="dialog" aria-label="Choose variables to show" hidden></div>
 </body>
 </html>

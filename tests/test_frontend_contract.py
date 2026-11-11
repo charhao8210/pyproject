@@ -233,6 +233,19 @@ def test_variables_used_or_changed_by_the_step_are_marked() -> None:
     assert 'card.classList.toggle("is-changed"' in script
 
 
+def test_variables_show_only_checked_names() -> None:
+    template = Path("app/templates/index.html").read_text(encoding="utf-8")
+    script = Path("app/static/app.js").read_text(encoding="utf-8")
+
+    assert 'id="variable-filter-button"' in template and 'id="variable-filter"' in template
+    # The picker sits outside `.panel`, which clips its children.
+    assert template.index('id="variable-filter"') > template.index("</main>")
+    assert "variableFilter: {all: false, pinned: new Set()}" in script
+    assert "const isShown = (name) => all || pinned.has(name);" in script
+    assert "variableFilterNote(filteredOut)" in script
+    assert "variable-pin" not in script  # no 📌 mark (the user's choice)
+
+
 def test_loop_buttons_skip_the_innermost_loop() -> None:
     template = Path("app/templates/index.html").read_text(encoding="utf-8")
     script = Path("app/static/app.js").read_text(encoding="utf-8")

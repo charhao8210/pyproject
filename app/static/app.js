@@ -62,6 +62,9 @@ const state = {
     candidates: {},
     candidatesTimer: null,
     running: false,
+    // Variables lists only `pinned` names (checked in Show ▾, kept on every step); `all` turns
+    // the filter off. Reset by each run.
+    variableFilter: {all: false, pinned: new Set()},
     // The view the user picked; it is kept across runs and applied whenever the new trace offers it.
     view: {
         renderer: "auto",
@@ -188,6 +191,8 @@ const elements = {
     chooserVariables: document.querySelector("#chooser-variables"),
     chooserSlots: document.querySelector("#chooser-slots"),
     chooserRunButton: document.querySelector("#chooser-run-button"),
+    variableFilterButton: document.querySelector("#variable-filter-button"),
+    variableFilter: document.querySelector("#variable-filter"),
 };
 
 const containerTypes = new Set(["list", "tuple", "dict", "set", "frozenset", "object"]);
@@ -208,6 +213,27 @@ elements.previousButton.addEventListener("click", () => stepManually(state.curre
 elements.nextButton.addEventListener("click", () => stepManually(state.currentStep + 1));
 elements.loopEndButton.addEventListener("click", () => jumpOutOfLoop("after"));
 elements.slider.addEventListener("input", (event) => stepManually(Number(event.target.value)));
+elements.variableFilterButton.addEventListener("click", () => setVariableFilterOpen(elements.variableFilter.hidden));
+elements.variableFilter.addEventListener("change", changeVariableFilter);
+elements.variableFilter.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-check-group]");
+    if (!button) return;
+    const names = [...elements.variableFilter.querySelectorAll(`input[data-group="${button.dataset.checkGroup}"]`)]
+        .map((input) => input.value);
+    const check = button.dataset.check === "true";
+    names.forEach((name) => (check ? state.variableFilter.pinned.add(name) : state.variableFilter.pinned.delete(name)));
+    renderVariableFilter();
+    refreshVariables();
+});
+// The picker closes on a click elsewhere or Escape.
+document.addEventListener("pointerdown", (event) => {
+    if (!elements.variableFilter.hidden && !event.target.closest("#variable-filter, #variable-filter-button")) {
+        setVariableFilterOpen(false);
+    }
+});
+document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !elements.variableFilter.hidden) setVariableFilterOpen(false);
+});
 elements.stdinEditor.addEventListener("input", () => {
     updateStdinCount();
     saveDrafts();
@@ -499,6 +525,8 @@ function resetTraceView() {
     elements.eventLabel.textContent = "—";
     elements.variables.className = "panel-body empty-state";
     elements.variables.textContent = "Run the program to inspect variables.";
+    setVariableFilterOpen(false);
+    elements.variableFilterButton.disabled = true;
     elements.stdout.innerHTML = '<span class="output-placeholder">Program output appears here.</span>';
     elements.algorithmName.textContent = "Algorithm";
     elements.algorithmConfidence.textContent = "Not analyzed";
@@ -914,6 +942,10 @@ async function runCode() {
         }
 
         state.result = payload;
+        // Checks are not kept between runs (the user's choice).
+        state.variableFilter = {all: false, pinned: new Set()};
+        setVariableFilterOpen(false);
+        elements.variableFilterButton.disabled = false;
         state.currentStep = payload.status === "completed" ? 0 : Math.max(0, payload.steps.length - 1);
         state.algorithmGraphPositions.clear();
         state.recursionPositions.clear();
@@ -1163,14 +1195,22 @@ function renderVariables(step, visualization) {
     Object.entries(step.usage?.appearing || {}).forEach(([name, entry]) => {
         (entry.global ? globals : locals)[name] = entry.value;
     });
-    const entries = variableEntries(locals, globals, hidden);
+    const allEntries = variableEntries(locals, globals, hidden);
+    // Only names checked in Show ▾ are listed (the user's choice), unless "show all" is on.
+    const {all, pinned} = state.variableFilter;
+    const isShown = (name) => all || pinned.has(name);
+    const entries = allEntries.filter(([name]) => isShown(name));
+    const filteredOut = allEntries.filter(([name]) => !isShown(name)).map(([name]) => name);
     elements.variables.replaceChildren();
     elements.variables.className = "panel-body";
     if (!entries.length) {
         elements.variables.classList.add("empty-state");
-        elements.variables.textContent = hidden.size
-            ? "Every variable at this step is drawn in the algorithm view."
-            : "No variables at this step.";
+        elements.variables.textContent = allEntries.length
+            ? "按 Show ▾ 勾選要看的變數。"
+            : hidden.size
+                ? "Every variable at this step is drawn in the algorithm view."
+                : "No variables at this step.";
+        if (filteredOut.length) elements.variables.append(variableFilterNote(filteredOut));
         return;
     }
 
@@ -1247,6 +1287,123 @@ function renderVariables(step, visualization) {
     zones.classList.toggle("is-split", zones.childElementCount === 2);
     elements.variables.classList.add("has-zones");
     elements.variables.append(zones);
+    if (filteredOut.length) elements.variables.append(variableFilterNote(filteredOut));
+}
+
+function refreshVariables() {
+    const step = state.result?.steps[state.currentStep];
+    if (step) renderVariables(step, currentVisualization(step));
+}
+
+// `另有 6 個沒顯示：n k mid …` under the variables, with a switch that turns the filter off.
+function variableFilterNote(names) {
+    const note = document.createElement("div");
+    note.className = "variable-filter-note";
+    const listed = names.length > 8 ? [...names.slice(0, 8), "…"] : names;
+    const text = textSpan(`另有 ${names.length} 個沒顯示：`, "");
+    text.append(textSpan(listed.join(" "), "variable-filter-names"));
+    const showAll = document.createElement("button");
+    showAll.type = "button";
+    showAll.className = "variable-filter-link";
+    showAll.textContent = "全部顯示";
+    showAll.addEventListener("click", () => {
+        state.variableFilter.all = true;
+        refreshVariables();
+        if (!elements.variableFilter.hidden) renderVariableFilter();
+    });
+    note.append(text, showAll);
+    return note;
+}
+
+function setVariableFilterOpen(open) {
+    if (open && !state.result) return;
+    const picker = elements.variableFilter;
+    picker.hidden = !open;
+    elements.variableFilterButton.setAttribute("aria-expanded", String(open));
+    elements.variableFilterButton.classList.toggle("is-open", open);
+    if (!open) return;
+    renderVariableFilter();
+    // Under the button, right edges aligned; above it when there is more room there.
+    const box = elements.variableFilterButton.getBoundingClientRect();
+    const below = window.innerHeight - box.bottom - 14;
+    const above = box.top - 14;
+    picker.style.maxHeight = `${Math.max(below, above)}px`;
+    picker.style.left = `${Math.max(8, Math.min(box.right - picker.offsetWidth, window.innerWidth - picker.offsetWidth - 8))}px`;
+    picker.style.top = below >= Math.min(above, picker.offsetHeight)
+        ? `${box.bottom + 6}px`
+        : `${box.top - 6 - picker.offsetHeight}px`;
+}
+
+// Every variable Variables can list in this trace, first value kept for its type and group.
+function filterableVariables() {
+    const step = state.result.steps[state.currentStep];
+    const hidden = new Set([...(currentVisualization(step)?.uses || []).map(String), ...inputNames(step)]);
+    const found = new Map();
+    state.result.steps.forEach((item) => {
+        variableEntries(item.locals || {}, item.globals || {}, hidden).forEach(([name, value]) => {
+            if (!found.has(name)) found.set(name, value);
+        });
+    });
+    const order = variableOrder(state.result);
+    return [...found].sort(([left], [right]) => (order.get(left) ?? Infinity) - (order.get(right) ?? Infinity));
+}
+
+function renderVariableFilter() {
+    const picker = elements.variableFilter;
+    const {all, pinned} = state.variableFilter;
+    const checkbox = (checked, attributes) => {
+        const input = document.createElement("input");
+        input.type = "checkbox";
+        input.checked = checked;
+        Object.assign(input.dataset, attributes.data || {});
+        if (attributes.value) input.value = attributes.value;
+        return input;
+    };
+    const title = document.createElement("h3");
+    title.textContent = "要顯示哪些變數";
+    const allRow = document.createElement("label");
+    allRow.className = "variable-filter-all";
+    allRow.append(checkbox(all, {data: {role: "all"}}), document.createTextNode("全部顯示（不自動篩選）"));
+    picker.replaceChildren(title, allRow);
+
+    const variables = filterableVariables();
+    const groups = [["scalar", "單值"], ["container", "陣列與容器"]];
+    groups.forEach(([group, label]) => {
+        const members = variables.filter(([, value]) => isScalarValue(value) === (group === "scalar"));
+        if (!members.length) return;
+        const header = document.createElement("div");
+        header.className = "variable-filter-group";
+        const actions = document.createElement("span");
+        [["全勾", "true"], ["全不勾", "false"]].forEach(([text, check]) => {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = "variable-filter-link";
+            button.textContent = text;
+            button.dataset.checkGroup = group;
+            button.dataset.check = check;
+            actions.append(button);
+        });
+        header.append(textSpan(label, ""), actions);
+        picker.append(header);
+        members.forEach(([name, value]) => {
+            const item = document.createElement("label");
+            item.className = "variable-filter-item";
+            const type = state.language === "cpp" ? cppTypeName(value).text : displayType(value);
+            item.append(textSpan(name, "variable-filter-name"), textSpan(type, "type-tag"),
+                checkbox(pinned.has(name), {value: name, data: {group}}));
+            picker.append(item);
+        });
+    });
+    if (!variables.length) picker.append(textSpan("這次執行沒有可以選的變數。", "variable-filter-foot"));
+    picker.append(textSpan("只有勾選的變數會顯示，每一步都在。", "variable-filter-foot"));
+}
+
+function changeVariableFilter(event) {
+    const input = event.target;
+    if (input.dataset.role === "all") state.variableFilter.all = input.checked;
+    else if (input.checked) state.variableFilter.pinned.add(input.value);
+    else state.variableFilter.pinned.delete(input.value);
+    refreshVariables();
 }
 
 // `mid+1 = 7+1 = ` in front of the value a line assigns. A bare number (`ma = 0`, `r = 1e18`)
