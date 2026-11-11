@@ -19,9 +19,7 @@ from .cpp_source import (
     analyze_source,
     _normalize_type,
     classify_type,
-    cube_layer_index,
     fixed_array_type,
-    is_integer_type,
     strip_code,
     template_arguments,
 )
@@ -58,9 +56,6 @@ TAIL_MARKER = "@tail"
 TABLE_MARKER = "@rows"
 HEAP_MARKER = "@heap"
 CHAR_TABLE_MARKER = "@chars"
-CUBE_MARKER = "@cube"
-PACK_MARKER = "@pack"
-MAX_CUBE_BLOCK_BYTES = 65536
 # Printed instead of a global that no line has touched since the previous stop.
 SAME_VALUE = "@same"
 MAX_VALUE_ITEMS = 50
@@ -94,73 +89,6 @@ extern "C" __attribute__((used, noinline, optimize("O2")))
 unsigned long long pvdbg_used_bytes(const unsigned char *data, unsigned long long size) {
     while (size > 0 && data[size - 1] == 0) --size;
     return size;
-}
-
-// Called from GDB: writes the part of the top-left corner (`rows` slices of `width` bytes) of
-// `blocks` layers of a 3D array that holds data as text, `{1, 0, 2, ...}`, layer by layer and
-// row by row, so GDB prints one string instead of formatting every value itself (about 10 us
-// each). `kind`: 0 signed, 1 unsigned, 2 floating point, 3 bool. Returns
-// `used rows << 32 | used elements per row`, or 0 when the text would not fit.
-__attribute__((used)) char pvdbg_text[131072];
-static char *pvdbg_write_integer(char *out, unsigned long long value, bool negative) {
-    char digits[24];
-    int count = 0;
-    do digits[count++] = char('0' + value % 10); while (value /= 10);
-    if (negative) *out++ = '-';
-    while (count) *out++ = digits[--count];
-    return out;
-}
-extern "C" __attribute__((used, noinline, optimize("O2")))
-unsigned long long pvdbg_pack(const char *source, long long blocks, long long block_stride, long long rows,
-                              long long row_stride, long long width, long long element, long long kind) {
-    long long used_rows = 0, used_width = 0;
-    for (long long block = 0; block < blocks; ++block)
-        for (long long row = 0; row < rows; ++row) {
-            const char *from = source + block * block_stride + row * row_stride;
-            for (long long i = width - 1; i >= used_width; --i)
-                if (from[i]) {
-                    used_width = i + 1;
-                    break;
-                }
-            for (long long i = 0; i < width; ++i)
-                if (from[i]) {
-                    if (row + 1 > used_rows) used_rows = row + 1;
-                    break;
-                }
-        }
-    long long columns = (used_width + element - 1) / element;
-    char *out = pvdbg_text;
-    char *limit = pvdbg_text + sizeof(pvdbg_text) - 64;
-    *out++ = '{';
-    for (long long block = 0; block < blocks; ++block)
-        for (long long row = 0; row < used_rows; ++row)
-            for (long long column = 0; column < columns; ++column) {
-                if (out >= limit) {
-                    pvdbg_text[0] = 0;
-                    return 0;
-                }
-                if (out > pvdbg_text + 1) {
-                    *out++ = ',';
-                    *out++ = ' ';
-                }
-                const char *at = source + block * block_stride + row * row_stride + column * element;
-                if (kind == 2) {
-                    double value = element == 4 ? *(const float *) at : element == 8 ? *(const double *) at : (double) *(const long double *) at;
-                    out += std::sprintf(out, "%.17g", value);
-                } else if (kind == 3) {
-                    const char *word = *at ? "true" : "false";
-                    while (*word) *out++ = *word++;
-                } else {
-                    unsigned long long bits = 0;
-                    std::memcpy(&bits, at, element > 8 ? 8 : element);
-                    if (kind == 0 && element < 8 && (bits >> (element * 8 - 1)) & 1) bits |= ~0ULL << (element * 8);
-                    bool negative = kind == 0 && (long long) bits < 0;
-                    out = pvdbg_write_integer(out, negative ? 0 - bits : bits, negative);
-                }
-            }
-    *out++ = '}';
-    *out = 0;
-    return (unsigned long long) used_rows << 32 | (unsigned long long) columns;
 }
 """
 
@@ -506,7 +434,7 @@ def _discover(
                 element=element,
                 # GDB's own element type (`long long`) is safe to cast to even when a macro
                 # renames `int` in the source.
-                row_type=row_type if model.raw_casts or kind in TREE_KINDS or kind == "cube" else "",
+                row_type=row_type if model.raw_casts or kind in TREE_KINDS else "",
                 declaration_line=candidate.declaration_line,
                 ready_line=candidate.declaration_line,
             )
@@ -743,32 +671,6 @@ def _extraction_plan(
                 )
         # Marking runs after extraction: the line itself executes after this stop.
         plan[line] = commands + plan[line]
-    # A 3D array shows the layer its first index is on; that index is updated first.
-    global_names = {candidate.name for candidate in model.globals}
-    for spec in (*discovery.global_specs, *model.vectors):
-        if spec.kind != "cube":
-            continue
-        plan[0].extend([f"set $pv_layer_{spec.name} = 0", f"set $pv_cube_{spec.name}_cols = 0"])
-        layer = cube_layer_index(code, spec.name)
-        if layer is None:
-            continue
-        variable, expression = layer
-        flag = (
-            f"$pv_dirty_{spec.name}" if spec in discovery.global_specs
-            else f"$pv_ldirty_{spec.name}" if spec.name in local_cached
-            else None
-        )
-        for line in discovery.break_lines:
-            scope = discovery.scopes.get(line)
-            if scope is None or not spec.visible_at(line) or variable in model.line_declarations.get(line, ()):
-                continue
-            is_global = variable not in scope
-            if is_global and variable not in global_names:
-                continue
-            # Only an integer is safe to evaluate: a failing GDB command ends the trace.
-            if not is_integer_type(model.declared_type(variable, line, is_global), model.aliases):
-                continue
-            plan[line] = [*_cube_layer_commands(spec.name, expression, flag), *plan[line]]
     return plan
 
 
@@ -812,7 +714,7 @@ READ_ONLY_MEMBERS = frozenset({
 _SUBSCRIPTS = r"(?:\s*\[(?:[^\[\]]|\[(?:[^\[\]]|\[[^\[\]]*\])*\])*\])*"
 
 
-INDEXED_KINDS = frozenset({"array", "matrix", "cube", "vector", "nested", "bits", "vector_array", "string", "deque"})
+INDEXED_KINDS = frozenset({"array", "matrix", "vector", "nested", "bits", "vector_array", "string", "deque"})
 
 
 def _may_write(statement: str, name: str, subscript_reads: bool = True) -> bool:
@@ -1104,9 +1006,6 @@ def _value_commands(marker: str, spec: ValueSpec, cached: bool = False, sticky: 
         commands.extend(_native_array_commands(name, spec))
     elif spec.kind == "matrix":
         commands.extend(_native_matrix_commands(name, spec))
-    elif spec.kind == "cube":
-        # Only a global keeps one address for the whole trace (its start is read once).
-        commands.extend(_cube_commands(name, spec.row_type if marker == GLOBAL_MARKER else ""))
     elif spec.kind in {"deque", "queue", "stack"}:
         storage = name if spec.kind == "deque" else f"{name}.c"
         commands.extend(_deque_commands(storage, spec.kind, MAX_VALUE_ITEMS))
@@ -1281,120 +1180,6 @@ def _native_matrix_commands(name: str, spec: ValueSpec) -> list[str]:
         "end",
     ]
 
-
-def _cube_commands(name: str, element_type: str = "") -> list[str]:
-    """Print two layers of a 3D array: `@cube <layers> <rows> <columns>`, then either
-    `@pack <first layer> <layers> <rows> <columns>` and their corners as one list, or per layer
-    `@layer <index>` and its rows.
-
-    `dp[1005][305][305]` is far too big to read at every stop, and a recurrence reads the
-    layer before the one it writes, so the layers shown are `$pv_layer_<name> - 1` and
-    `$pv_layer_<name>` (0 and 1 until the code's first index is known, `_cube_layer_commands`).
-    Like matrix rows, everything is reached by pointer arithmetic from `&name[0][0][0]`.
-
-    With a builtin element type (and a global, whose sizes and address never change), the
-    prelude's `pvdbg_pack` copies the corner of both layers that holds data (within 30 x 40)
-    into one buffer and GDB prints only that: reading two whole-row blocks (127 KB for the
-    user's knapsack) or a fixed 30 x 40 corner made every stop several ms slower, since GDB
-    formats each value it prints.
-    """
-    origin = f"&{name}[0][0][0]"
-    layer_start = f"({origin} + $pv_layer * $pv_rows_total * $pv_total)"
-    if element_type:
-        cube = f"$pv_cube_{name}"
-        return [
-            # Sizes and the start address, once per trace.
-            f"if {cube}_cols == 0",
-            f"set {cube}_layers = sizeof({name}) / sizeof(*{name})",
-            f"set {cube}_cols = &{name}[0][1][0] - {origin}",
-            f"set {cube}_rows = (&{name}[1][0][0] - {origin}) / {cube}_cols",
-            f"set {cube}_esize = (char *) &{name}[0][0][1] - (char *) {origin}",
-            f"set {cube}_origin = (const char *) {origin}",
-            "end",
-            f'printf "{CUBE_MARKER} %d %d %d\\n", {cube}_layers, {cube}_rows, {cube}_cols',
-            f"set $pv_layer = $pv_layer_{name} < 1 ? 1 : $pv_layer_{name}",
-            f"set $pv_layer = ($pv_layer >= {cube}_layers ? {cube}_layers - 1 : $pv_layer) - 1",
-            f"set $pv_lcount = $pv_layer + 2 > {cube}_layers ? {cube}_layers - $pv_layer : 2",
-            "set $pv_layer = $pv_layer < 0 ? 0 : $pv_layer",
-            f"set $pv_lcount = $pv_layer + $pv_lcount > {cube}_layers ? {cube}_layers - $pv_layer : $pv_lcount",
-            f"set $pv_n = pvdbg_pack({cube}_origin + $pv_layer * {cube}_rows * {cube}_cols * {cube}_esize,"
-            f" $pv_lcount, {cube}_rows * {cube}_cols * {cube}_esize,"
-            f" {cube}_rows > {MAX_TABLE_ROWS} ? {MAX_TABLE_ROWS} : {cube}_rows, {cube}_cols * {cube}_esize,"
-            f" ({cube}_cols > {MAX_TABLE_COLUMNS} ? {MAX_TABLE_COLUMNS} : {cube}_cols) * {cube}_esize, {cube}_esize,"
-            f" {_cube_value_kind(element_type)})",
-            "set $pv_prows = $pv_n >> 32",
-            "set $pv_pcols = $pv_n & 0xffffffff",
-            f'printf "{PACK_MARKER} %d %d %d %d\\n", $pv_layer, $pv_lcount, $pv_prows, $pv_pcols',
-            "if $pv_prows > 0",
-            'printf "%s", (const char *) &pvdbg_text[0]',
-            "end",
-        ]
-    return [
-        f"set $pv_layers_total = sizeof({name}) / sizeof(*{name})",
-        f"set $pv_total = &{name}[0][1][0] - {origin}",
-        f"set $pv_rows_total = (&{name}[1][0][0] - {origin}) / $pv_total",
-        f"set $pv_rows = $pv_rows_total > {MAX_TABLE_ROWS} ? {MAX_TABLE_ROWS} : $pv_rows_total",
-        f"set $pv_len = $pv_total > {MAX_TABLE_COLUMNS} ? {MAX_TABLE_COLUMNS} : $pv_total",
-        # Whole rows fit in one read up to GDB's 64 KiB max-value-size: one `output` per
-        # layer, with runs of zeros printed as `<repeats>`, instead of one per row.
-        # The element size by address: `sizeof(***dp)` makes GDB load a whole layer.
-        f"set $pv_brows = {MAX_CUBE_BLOCK_BYTES} / ($pv_total * ((char *) &{name}[0][0][1] - (char *) {origin}))",
-        "set $pv_brows = $pv_brows > $pv_rows ? $pv_rows : $pv_brows",
-        f'printf "{CUBE_MARKER} %d %d %d\\n", $pv_layers_total, $pv_rows_total, $pv_total',
-        f"set $pv_layer = $pv_layer_{name} < 1 ? 1 : $pv_layer_{name}",
-        "set $pv_layer = ($pv_layer >= $pv_layers_total ? $pv_layers_total - 1 : $pv_layer) - 1",
-        "set $pv_layer_end = $pv_layer + 2 > $pv_layers_total ? $pv_layers_total : $pv_layer + 2",
-        "set $pv_layer = $pv_layer < 0 ? 0 : $pv_layer",
-        "if $pv_brows > 0",
-        f"set print elements {MAX_CUBE_BLOCK_BYTES}",
-        "set print repeats 10",
-        "while $pv_layer < $pv_layer_end",
-        'printf "@layer %d\\n", $pv_layer',
-        f"output *{layer_start}@($pv_brows * $pv_total)",
-        "echo \\n",
-        "set $pv_layer = $pv_layer + 1",
-        "end",
-        f"set print elements {MAX_VALUE_ITEMS}",
-        "set print repeats unlimited",
-        "else",
-        # A row wider than 64 KiB: its first columns, row by row.
-        "while $pv_layer < $pv_layer_end",
-        'printf "@layer %d\\n", $pv_layer',
-        "set $pv_row = 0",
-        "while $pv_row < $pv_rows",
-        'printf "%d %d ", $pv_row, $pv_total',
-        f"output *({layer_start} + $pv_row * $pv_total)@$pv_len",
-        "echo \\n",
-        "set $pv_row = $pv_row + 1",
-        "end",
-        "set $pv_layer = $pv_layer + 1",
-        "end",
-        "end",
-    ]
-
-
-def _cube_value_kind(element_type: str) -> int:
-    """How `pvdbg_pack` writes an element: 0 signed, 1 unsigned, 2 floating point, 3 bool."""
-    if element_type == "bool":
-        return 3
-    if element_type in {"float", "double", "long double"}:
-        return 2
-    return 1 if element_type.startswith("unsigned") else 0
-
-
-def _cube_layer_commands(name: str, expression: str, flag: str | None) -> list[str]:
-    """Follow the layer the code is on: `dp[i][j][k] = …` makes it `i`.
-
-    A changed layer marks the array for reading again, since its cached text holds the
-    old layers. A value out of range (`i` still garbage) leaves the layer alone.
-    """
-    return [
-        f"set $pv_lv = (long long) ({expression})",
-        f"if $pv_lv >= 0 && $pv_lv < sizeof({name}) / sizeof(*{name}) && $pv_lv != $pv_layer_{name}",
-        f"set $pv_layer_{name} = $pv_lv",
-        *([f"set {flag} = 1"] if flag else []),
-        "end",
-    ]
 
 
 def _sequence_commands(expression: str, limit: int) -> list[str]:
@@ -1746,8 +1531,6 @@ def _serialize_cpp_value(value: str, identity: str) -> dict[str, Any]:
         return {"type": "object", "class_name": "pointer", "value": f"→ {pointer.group(1)}"}
     if value.startswith((TABLE_MARKER, CHAR_TABLE_MARKER)):
         return _serialize_table(value, identity)
-    if value.startswith(CUBE_MARKER):
-        return _serialize_cube(value, identity)
     if value.startswith("@bits"):
         return _serialize_bits(value, identity, MAX_VALUE_ITEMS)
     tree = re.match(r"@(set|multiset|map|multimap)\s+(-?\d+)", value)
@@ -2039,71 +1822,6 @@ def _serialize_table(value: str, identity: str) -> dict[str, Any]:
         **({"truncated": True} if total > row_count else {}),
     }
 
-
-def _serialize_cube(value: str, identity: str) -> dict[str, Any]:
-    """`@cube 1005 305 305` and two `@layer` tables → `{"type": "cube", "layers": [...]}`."""
-    header, *chunks = re.split(r"^@layer\s+", value.strip(), flags=re.MULTILINE)
-    sizes = [int(number) for number in re.findall(r"-?\d+", header.split("\n", 1)[0])[:3]]
-    layer_count, row_count, column_count = (sizes + [0, 0, 0])[:3]
-    layers = []
-    pack = re.search(rf"^{PACK_MARKER}\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s*\n(.*)", header, re.MULTILINE | re.DOTALL)
-    if pack:
-        # Both corners in one list (`pvdbg_pack`): layer by layer, row by row, `width` each.
-        first, count, rows, width = (int(pack.group(index)) for index in range(1, 5))
-        block = pack.group(5).strip()
-        values = _expand_cpp_repeats(_split_cpp_items(block[1:-1]), count * rows * width) if block.startswith("{") else []
-        for offset in range(count):
-            layer_identity = f"{identity}[{first + offset}]"
-            table_rows = []
-            for row in range(rows):
-                start = (offset * rows + row) * width
-                table_rows.append({
-                    "type": "list",
-                    "object_id": zlib.crc32(f"{layer_identity}[{row}]".encode("utf-8")),
-                    "items": [_cube_entry(text, f"{layer_identity}[{row}]") for text in values[start : start + width]],
-                    **({"truncated": True} if column_count > width else {}),
-                })
-            layers.append({
-                "index": first + offset,
-                "value": {
-                    "type": "list",
-                    "object_id": zlib.crc32(layer_identity.encode("utf-8")),
-                    "items": table_rows,
-                    **({"truncated": True} if row_count > rows else {}),
-                },
-            })
-    for chunk in chunks:
-        index_text, _, rows = chunk.partition("\n")
-        if not index_text.strip().isdigit():
-            continue
-        index = int(index_text.strip())
-        rows = rows.strip()
-        if rows.startswith("{") and column_count > 0:
-            # One block of whole rows: split it back into rows of `column_count`.
-            values = _expand_cpp_repeats(_split_cpp_items(rows[1:-1]), MAX_TABLE_ROWS * column_count)
-            rows = "\n".join(
-                f"{row} {column_count} {{{', '.join(values[row * column_count : row * column_count + min(column_count, MAX_TABLE_COLUMNS)])}}}"
-                for row in range(min(len(values) // column_count, MAX_TABLE_ROWS))
-            )
-        table = _serialize_table(f"{TABLE_MARKER} {row_count}\n{rows}", f"{identity}[{index}]")
-        layers.append({"index": index, "value": table})
-    return {
-        "type": "cube",
-        "class_name": "3D array",
-        "object_id": zlib.crc32(identity.encode("utf-8")),
-        "length": layer_count,
-        "rows": row_count,
-        "columns": column_count,
-        "layers": layers,
-    }
-
-
-def _cube_entry(text: str, identity: str) -> dict[str, Any]:
-    # Thousands of entries per stop: plain integers skip the general parser.
-    try:
-        return {"type": "int", "value": int(text)}
-    except ValueError:
-        return _serialize_cpp_value(text, identity)
 
 
 def _char_row(row: dict[str, Any]) -> dict[str, Any]:

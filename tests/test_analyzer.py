@@ -60,50 +60,6 @@ vis[c][r] = True
     assert set(last["uses"]) == {"a", "vis", "stack", "c", "r"}
 
 
-def test_binary_search_lists_drawn_bounds_and_readouts() -> None:
-    source = """\
-arr = [1, 3, 5, 7, 9]
-target = 7
-low, high = 0, len(arr) - 1
-while low <= high:
-    mid = (low + high) // 2
-    if arr[mid] == target:
-        break
-    if arr[mid] < target:
-        low = mid + 1
-    else:
-        high = mid - 1
-"""
-    result = run_debugger(source)
-
-    uses = [set(step["visualization"].get("uses", [])) for step in result["steps"]]
-    assert any({"arr", "mid", "low", "high", "target"} <= names for names in uses)
-
-
-def test_binary_search_uses_array_renderer() -> None:
-    source = """\
-arr = [1, 3, 5, 7, 9]
-target = 7
-low, high = 0, len(arr) - 1
-while low <= high:
-    mid = (low + high) // 2
-    if arr[mid] == target:
-        break
-    if arr[mid] < target:
-        low = mid + 1
-    else:
-        high = mid - 1
-"""
-    result = run_debugger(source)
-
-    assert result["algorithm"]["kind"] == "binary_search"
-    assert result["algorithm"]["renderer"] == "array"
-    assert any(
-        marker["role"] == "mid"
-        for step in result["steps"]
-        for marker in step["visualization"].get("markers", [])
-    )
-
 
 def test_list_based_adjacency_uses_graph_renderer() -> None:
     source = """\
@@ -137,69 +93,6 @@ while stack:
     assert ready
     assert set(ready[-1]["nodes"]) == {"1", "2", "3", "4", "5"}
 
-
-def test_python_sum_of_three_values_pair_array_uses_bars() -> None:
-    source = """\
-import sys
-
-data = sys.stdin.buffer.read().split()
-n, k = int(data[0]), int(data[1])
-inf = sorted((int(data[i + 2]), i + 1) for i in range(n))
-for i in range(n):
-    vi = inf[i][0]
-    idx = n - 1
-    for j in range(i + 1, n):
-        need = k - vi - inf[j][0]
-        while idx >= 0:
-            value = inf[idx][0]
-            if value == need and idx != i and idx != j:
-                print(inf[i][1], inf[j][1], inf[idx][1])
-                raise SystemExit
-            if value > need:
-                idx -= 1
-            else:
-                break
-print("IMPOSSIBLE")
-"""
-    result = run_debugger(source, stdin_text="4 8\n2 7 5 1\n")
-
-    assert result["algorithm"]["kind"] == "three_sum"
-    ready = [step["visualization"] for step in result["steps"] if step["visualization"].get("ready")]
-    assert ready
-    assert ready[-1]["values"] == [1, 2, 5, 7]
-    assert ready[-1]["labels"] == [4, 1, 3, 2]
-    # `k` is the target here, so it is a readout rather than an index marker.
-    assert all(marker["label"] != "k" for view in ready for marker in view["markers"])
-    assert any({"label": "k", "value": 8} in view.get("readouts", []) for view in ready)
-
-
-def test_half_open_binary_search_interval_uses_lo_hi() -> None:
-    source = """\
-arr = [1, 3, 5, 7, 9, 11]
-target = 7
-lo, hi = 0, len(arr)
-while lo < hi:
-    mid = (lo + hi) // 2
-    if arr[mid] < target:
-        lo = mid + 1
-    else:
-        hi = mid
-"""
-    result = run_debugger(source)
-
-    assert result["algorithm"]["kind"] == "binary_search"
-    intervals = [
-        step["visualization"]["interval"]
-        for step in result["steps"]
-        if step["visualization"].get("interval")
-    ]
-    assert intervals[0] == {"low": 0, "high": 5}
-    assert intervals[-1] == {"low": 3, "high": 3}
-    assert any(
-        marker["label"] == "hi"
-        for step in result["steps"]
-        for marker in step["visualization"].get("markers", [])
-    )
 
 
 def test_adjacency_detection_rejects_flag_and_value_tables() -> None:

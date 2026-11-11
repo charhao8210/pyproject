@@ -114,29 +114,6 @@ def test_auto_view_falls_back_when_the_profile_renderer_never_has_data() -> None
     assert last["values"] == [1, 1, 2, 4]
 
 
-def test_union_find_parent_array_is_drawn_as_a_forest() -> None:
-    result = run_debugger(
-        "p = list(range(5))\n"
-        "sz = [1] * 5\n"
-        "def find(x):\n"
-        "    while p[x] != x:\n"
-        "        x = p[x]\n"
-        "    return x\n"
-        "for a, b in [(0, 1), (2, 3), (1, 3)]:\n"
-        "    a, b = find(a), find(b)\n"
-        "    if a != b:\n"
-        "        p[b] = a\n"
-        "        sz[a] += sz[b]\n"
-    )
-
-    assert result["algorithm"]["kind"] == "union_find"
-    assert result["algorithm"]["views"][0]["id"] == "dsu:p"
-    last = result["steps"][-1]["visualization"]
-    assert last["layout"] == "forest" and last["directed"] is True
-    assert {(edge["source"], edge["target"]) for edge in last["edges"]} == {("1", "0"), ("3", "2"), ("2", "0")}
-    assert last["labels"]["name"] == "sz"
-    assert {"p", "sz"} <= set(last["uses"])
-
 
 @requires_cpp
 def test_cached_globals_still_see_writes_through_pointer_parameters() -> None:
@@ -237,19 +214,6 @@ int main() {
     assert {"source": "1", "target": "2"} in checking
     assert {"source": "2", "target": "4"} in checking
 
-
-def test_strings_get_a_cells_view_with_index_markers() -> None:
-    result = run_debugger(
-        "s = 'ATTCGG'\n"
-        "best = cur = 1\n"
-        "for i in range(1, len(s)):\n"
-        "    cur = cur + 1 if s[i] == s[i - 1] else 1\n"
-        "    best = max(best, cur)\n"
-    )
-
-    assert "cells:s" in [view["id"] for view in result["algorithm"]["views"]]
-    view = next(step["views"]["cells:s"] for step in result["steps"] if step["line"] == 4)
-    assert view["values"][:3] == ["'A'", "'T'", "'T'"] or view["values"][:3] == ["A", "T", "T"]
 
 
 def test_tree_graphs_get_parents_for_a_top_down_layout_and_labels() -> None:

@@ -1409,96 +1409,6 @@ h2 {
 .legend-swatch.returned { opacity: 0.45; }
 .legend-swatch.reading { border: 2px dashed var(--highlighter); }
 
-/* ---------- Segment tree ---------- */
-
-.segment-tree-svg {
-    display: block;
-    margin: 0 auto;
-}
-
-.segment-edge {
-    stroke: var(--rule);
-    stroke-width: 1.5;
-}
-
-.segment-edge.on-stack {
-    stroke: var(--pencil-muted);
-    stroke-width: 2.5;
-}
-
-.segment-node rect,
-.segment-base rect {
-    fill: var(--sheet-raised);
-    stroke: var(--pencil-faint);
-    stroke-width: 1;
-}
-
-.segment-base rect {
-    fill: var(--sheet);
-    stroke-dasharray: 3 2;
-}
-
-.segment-node.on-stack rect {
-    stroke: var(--pencil);
-    stroke-width: 2;
-}
-
-.segment-node.current rect {
-    fill: var(--highlighter);
-    stroke: var(--pencil);
-    stroke-width: 2;
-}
-
-/* Read by the line about to run (`tree[id*2] >= v`): a dashed highlighter outline. */
-.segment-node.reading rect {
-    stroke: var(--highlighter);
-    stroke-width: 2.5;
-    stroke-dasharray: 5 3;
-}
-
-.segment-node.written rect {
-    stroke: var(--write);
-    stroke-width: 3;
-    stroke-dasharray: none;
-}
-
-.segment-value,
-.segment-range,
-.segment-base-label {
-    font-family: var(--mono);
-    text-anchor: middle;
-}
-
-.segment-value {
-    fill: var(--pencil);
-    font-size: 13px;
-    font-weight: 700;
-}
-
-.segment-range {
-    fill: var(--pencil-faint);
-    font-size: 11px;
-}
-
-.segment-base-label {
-    fill: var(--pencil-muted);
-    font-size: 12px;
-    text-anchor: start;
-}
-
-.segment-node.current .segment-value,
-.segment-node.current .segment-range {
-    fill: var(--on-highlighter);
-}
-
-.segment-node.written .segment-value {
-    fill: var(--write);
-}
-
-.segment-node.current.written .segment-value {
-    fill: var(--on-highlighter);
-}
-
 /* The tree scrolls sideways; its summary and legend stay pinned to the panel's left edge. */
 .algorithm-meta.is-sticky {
     position: sticky;
@@ -1710,10 +1620,6 @@ h2 {
     background: var(--highlighter);
 }
 
-.array-column.outside-bound {
-    opacity: 0.3;
-}
-
 .algorithm-readouts {
     display: flex;
     flex-wrap: wrap;
@@ -1860,10 +1766,6 @@ h2 {
 .cells-item.written.active .cells-value,
 .cells-item.written.mid .cells-value {
     border-color: var(--write);
-}
-
-.cells-item.outside-bound {
-    opacity: 0.3;
 }
 
 .cells-item.added .cells-value {
@@ -2436,52 +2338,10 @@ a.button {
     text-decoration: underline dotted;
 }
 
-/* A 3D array: two layers side by side, each with its row and column numbers. */
-.layer-panels {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: center;
-    gap: 24px;
-}
-
-.layer-panel {
-    display: grid;
-    gap: 6px;
-    justify-items: center;
-}
-
-.layer-title {
-    color: var(--pencil);
-    font-family: var(--mono);
-    font-weight: 700;
-}
-
-.layer-grid {
-    margin: 0;
-}
-
-.layer-axis {
-    display: grid;
-    place-items: center;
-    color: var(--pencil-muted);
-    font-family: var(--mono);
-    font-size: max(9px, calc(var(--cell) * 0.3));
-}
-
-/* A cell the highlighted line reads (dp[i - 1][j][k]). */
+/* A cell the highlighted line reads. */
 .algorithm-cell.reading {
     z-index: 1;
     border: 2px dashed var(--highlighter);
     color: var(--pencil);
     font-weight: 700;
-}
-
-.cube-view {
-    display: grid;
-    gap: 6px;
-}
-
-.cube-layer-label {
-    color: var(--pencil-muted);
-    font-family: var(--mono);
 }

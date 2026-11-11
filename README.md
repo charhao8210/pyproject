@@ -121,7 +121,7 @@ The `language` field accepts `python` or `cpp`. The response contains the origin
 - `print()` with cumulative stdout snapshots
 - Python exceptions, including uncaught-exception visualization
 - A practical subset of safe built-ins such as `range`, `len`, `sum`, and `sorted`
-- Heuristic detection for grid traversal, DFS/BFS, recursion, binary search, three-sum/two-pointer search, sorting, dynamic-programming tables, and general array/matrix processing
+- Heuristic detection for grid traversal, DFS/BFS, recursion, sorting, and general array/matrix processing
 - Specialized grid, draggable graph, array-bar, and recursive-call renderers
 - RE, step-limit, and TLE runs preserve the steps collected before execution stopped
 - The Variables panel ranks algorithm-relevant state and suppresses common transient implementation details

@@ -172,33 +172,6 @@ int main() {
     assert ready[-1]["values"] == [1, 2, 5, 8]
 
 
-@pytest.mark.skipif(not shutil.which("g++") or not shutil.which("gdb"), reason="C++ toolchain unavailable")
-def test_cpp_sum_of_three_values_uses_three_sum_visualization() -> None:
-    result = run_debugger(
-        """#include <algorithm>
-#include <vector>
-using namespace std;
-int main() {
-    int n = 5, x = 12;
-    vector<int> a = {2, 7, 5, 1, 4};
-    sort(a.begin(), a.end());
-    for (int i = 0; i < n; ++i) {
-        int l = i + 1, r = n - 1;
-        while (l < r) {
-            int sum = a[i] + a[l] + a[r];
-            if (sum == x) return 0;
-            if (sum < x) ++l; else --r;
-        }
-    }
-    return 0;
-}
-""",
-        language="cpp",
-    )
-
-    assert result["algorithm"]["kind"] == "three_sum"
-    assert any(step["visualization"].get("ready") for step in result["steps"])
-
 
 @pytest.mark.skipif(not shutil.which("g++") or not shutil.which("gdb"), reason="C++ toolchain unavailable")
 def test_cpp_timeout_preserves_partial_trace() -> None:
@@ -302,45 +275,6 @@ int main() {
     in_total = [step for step in result["steps"] if step["function"] == "total"]
     assert in_total and _plain(in_total[-1]["locals"]["values"]) == [0, 1, 4, 9]
 
-
-@requires_cpp
-def test_cpp_cses_sum_of_three_values_with_pair_vector() -> None:
-    result = run_debugger(
-        """#include <bits/stdc++.h>
-using namespace std;
-int main() {
-    int n; long long x;
-    cin >> n >> x;
-    vector<pair<long long, int>> a(n);
-    for (int i = 0; i < n; i++) { cin >> a[i].first; a[i].second = i + 1; }
-    sort(a.begin(), a.end());
-    for (int i = 0; i < n; i++) {
-        int l = i + 1, r = n - 1;
-        while (l < r) {
-            long long s = a[i].first + a[l].first + a[r].first;
-            if (s == x) { cout << a[i].second << " " << a[l].second << " " << a[r].second << "\\n"; return 0; }
-            if (s < x) l++; else r--;
-        }
-    }
-    cout << "IMPOSSIBLE\\n";
-}
-""",
-        language="cpp",
-        stdin_text="4 8\n2 7 5 1\n",
-    )
-
-    assert result["status"] == "completed"
-    assert result["algorithm"]["kind"] == "three_sum"
-    assert result["steps"][-1]["stdout"] == "4 1 3\n"
-    ready = [step["visualization"] for step in result["steps"] if step["visualization"].get("ready")]
-    assert ready[-1]["values"] == [1, 2, 5, 7]
-    assert ready[-1]["labels"] == [4, 1, 3, 2]
-    windows = [view for view in ready if view.get("interval")]
-    assert windows and {marker["label"] for marker in windows[-1]["markers"]} >= {"i", "l", "r"}
-    # The target is an input value: drawn once in the input row, not again as a readout.
-    assert "x" not in {readout["label"] for readout in windows[-1]["readouts"]}
-    assert {"name": "x", "value": 8, "read": True} in result["steps"][-1]["inputs"]
-    assert any(readout["label"] == "s" for readout in windows[-1]["readouts"])
 
 
 @requires_cpp

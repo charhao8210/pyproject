@@ -245,7 +245,6 @@ def test_auto_draws_the_array_the_loops_write_not_the_input() -> None:
     )
     assert _loop_written_arrays(source, "python") == ("dp",)
     result = run_debugger(source, stdin_text="3 4\n1 2 3\n")
-    assert result["algorithm"]["kind"] == "dynamic_programming"
     assert {step["visualization"].get("name") for step in result["steps"] if step["visualization"].get("ready")} == {"dp"}
 
 
@@ -330,27 +329,6 @@ def test_optimize_pragmas_do_not_hide_variables() -> None:
     assert any(step["locals"].get("mid", {}).get("value") == 50 for step in steps)
 
 
-def test_input_values_are_not_repeated_as_view_readouts() -> None:
-    result = run_debugger(
-        "n, k = map(int, input().split())\n"
-        "a = list(map(int, input().split()))\n"
-        "lo, hi = 0, n - 1\n"
-        "while lo <= hi:\n"
-        "    mid = (lo + hi) // 2\n"
-        "    if a[mid] < k:\n"
-        "        lo = mid + 1\n"
-        "    else:\n"
-        "        hi = mid - 1\n"
-        "print(lo)\n",
-        stdin_text="5 7\n1 3 7 9 11\n",
-    )
-
-    assert result["algorithm"]["kind"] == "binary_search"
-    for step in result["steps"]:
-        labels = {readout["label"] for readout in step["visualization"].get("readouts", [])}
-        assert "k" not in labels and "k" not in step["visualization"].get("uses", [])
-    assert any(entry["name"] == "k" and entry["read"] for entry in result["steps"][-1]["inputs"])
-
 
 def test_only_a_variables_first_appearance_is_new() -> None:
     result = run_debugger(
@@ -399,17 +377,6 @@ def test_a_declared_value_carries_its_formula_on_the_line_that_declares_it() -> 
     assert by_line[3]["next"]["l"]["value"] == 9
     assert by_line[3]["formula"]["l"] == {"expression": "l + 2", "substituted": "7 + 2"}
 
-
-def test_integers_beyond_javascript_precision_carry_exact_text() -> None:
-    from app.main import _mark_large_integers
-
-    shared = {"type": "int", "value": 500000000000000003}
-    result = {"steps": [{"locals": {"mid": shared, "n": {"type": "int", "value": 5}}}], "inputs": [{"name": "r", "value": 10**18}]}
-    _mark_large_integers(result)
-
-    assert shared["text"] == "500000000000000003"
-    assert "text" not in result["steps"][0]["locals"]["n"]
-    assert result["inputs"][0]["text"] == "1000000000000000000"
 
 
 @requires_cpp
@@ -471,42 +438,6 @@ int main() {
 }
 """
 
-
-def test_segment_tree_detection_finds_the_array_node_and_range() -> None:
-    from app.segment_tree import detect
-
-    spec = detect(SEGMENT_TREE, "cpp")
-
-    assert spec == {
-        "array": "tree", "node": "id", "lower": "l", "upper": "r",
-        "functions": ["build"], "root": 1, "base": "a",
-    }
-    python = "def build(node, lo, hi):\n    seg[2*node] = seg[2*node+1] = 0\n"
-    assert detect(python, "python")["node"] == "node"
-    assert detect("int main() { a[i*2] = 1; }", "cpp") is None
-
-
-@requires_cpp
-def test_segment_trees_are_drawn_as_trees() -> None:
-    result = run_debugger(SEGMENT_TREE, language="cpp")
-    algorithm = result["algorithm"]
-
-    assert result["steps"][-1]["stdout"] == "4"
-    assert algorithm["kind"] == "segment_tree" and algorithm["auto_renderer"] == "segment_tree"
-    layout = algorithm["views"][0]["layout"]
-    assert [(node["id"], node["l"], node["r"]) for node in layout["nodes"]] == [
-        (1, 1, 4), (2, 1, 2), (4, 1, 1), (5, 2, 2), (3, 3, 4), (6, 3, 3), (7, 4, 4),
-    ]
-    last = result["steps"][-1]["visualization"]
-    assert last["values"] == ["4", "3", "3", "2", "4", "4", "1"]
-    assert last["base"] == {"name": "a", "values": ["3", "2", "4", "1"]}
-    # On `tree[id] = max(tree[id*2], tree[id*2+1])` inside build(3, 4, 3): node 3 runs, under
-    # the root, reading its children 6 and 7.
-    combine = next(
-        step["visualization"] for step in result["steps"]
-        if step["line"] == 10 and step["visualization"].get("current") == 3
-    )
-    assert combine["path"] == [1, 3] and combine["reading"] == [6, 7]
 
 
 @requires_cpp

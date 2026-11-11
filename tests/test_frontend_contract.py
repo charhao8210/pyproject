@@ -190,14 +190,6 @@ def test_svg_dragging_maps_pointer_through_screen_ctm() -> None:
     assert "lostpointercapture" in dragging
 
 
-def test_array_renderer_uses_backend_interval_and_readouts() -> None:
-    script = Path("app/static/app.js").read_text(encoding="utf-8")
-    renderer = script[script.index("function renderArrayAlgorithm"):script.index("function renderGraphAlgorithm")]
-
-    assert "view.interval" in renderer
-    assert "view.readouts" in renderer
-    assert "!indexMarkers.length" in renderer
-
 
 def test_variables_panel_includes_unshadowed_globals() -> None:
     script = Path("app/static/app.js").read_text(encoding="utf-8")
@@ -300,20 +292,6 @@ def test_assignments_show_their_formula() -> None:
     # Substituted forms holding a number of 10^6 or more are left out.
     assert r"/\d{7,}/.test(substituted)" in script
 
-
-def test_large_integers_render_from_their_exact_text() -> None:
-    script = Path("app/static/app.js").read_text(encoding="utf-8")
-
-    assert "function numberText(" in script and "value.text ?? String(value.value)" in script
-
-
-def test_segment_trees_have_their_own_renderer() -> None:
-    script = Path("app/static/app.js").read_text(encoding="utf-8")
-    style = Path("app/static/style.css").read_text(encoding="utf-8")
-
-    assert "function renderSegmentTreeAlgorithm(" in script
-    assert "segment_tree: renderSegmentTreeAlgorithm" in script and 'segment_tree: "Segment tree"' in script
-    assert ".segment-node.current rect" in style and ".segment-node.reading rect" in style
 
 
 def test_help_page_and_hover_terms() -> None:

@@ -66,8 +66,6 @@ const RENDERER_LABELS = {
     array: "Bars",
     cells: "Cells",
     graph: "Graph",
-    dsu: "Union-find forest",
-    segment_tree: "Segment tree",
     recursion_tree: "Recursion tree",
     call_tree: "Call chain",
     execution: "Current line",
@@ -1148,7 +1146,6 @@ function renderValue(value, depth, changes = null) {
     }
     if (value.type === "none") return textSpan("None", "primitive none");
 
-    if (value.type === "cube") return renderCubeValue(value);
     if (depth === 0 && isTableValue(value)) return renderTableValue(value, changedTableCells);
     if (["list", "tuple", "set", "frozenset"].includes(value.type)) {
         // A pair inside a list reads best as `(1, 2)`, not as a nested row of cells.
@@ -1228,17 +1225,6 @@ function renderValue(value, depth, changes = null) {
     return textSpan(value.value ?? `<${displayType(value)}>`, "primitive");
 }
 
-// A 3D array arrives as the two layers read at this stop (`dp[i-1]`, `dp[i]`), each a table.
-function renderCubeValue(value) {
-    const wrapper = document.createElement("div");
-    wrapper.className = "cube-view";
-    (value.layers || []).forEach((layer) => {
-        wrapper.append(textSpan(`[${layer.index}]`, "cube-layer-label"), renderTableValue(layer.value));
-    });
-    const shown = (value.layers || []).map((layer) => layer.index).join(" and ");
-    wrapper.append(textSpan(shown ? `Layers ${shown} of ${value.length}` : "Not read yet", "fill-note"));
-    return wrapper;
-}
 
 // A 2D array: rows of single values, or C++ character rows (strings that keep NUL cells).
 function isTableValue(value) {
@@ -1326,9 +1312,8 @@ function displayType(value) {
     return value?.class_name || value?.type || "unknown";
 }
 
-// Integers beyond 2^53 lose digits as JSON numbers; the server adds their exact `text`.
 function numberText(value) {
-    return value.text ?? String(value.value);
+    return String(value.value);
 }
 
 // An instance of a class the program defined (`Node`), serialized as a dict of its fields.
@@ -1357,7 +1342,6 @@ function compactValue(value, depth = 0) {
         return `${isObjectFields(value) ? value.class_name : ""}{${items.join(", ")}}`;
     }
     if (value.type === "range") return `range(${value.value.start}, ${value.value.stop}, ${value.value.step})`;
-    if (value.type === "cube") return `[${value.length}][${value.rows}][${value.columns}]`;
     return String(value.value ?? `<${displayType(value)}>`);
 }
 
@@ -1625,11 +1609,9 @@ function renderAlgorithm(visualization) {
     }
     const renderers = {
         grid: renderGridAlgorithm,
-        layers: renderLayersAlgorithm,
         array: renderArrayAlgorithm,
         cells: renderCellsAlgorithm,
         graph: renderGraphAlgorithm,
-        segment_tree: renderSegmentTreeAlgorithm,
         recursion_tree: renderRecursionTreeAlgorithm,
         call_tree: renderCallTreeAlgorithm,
         execution: renderExecutionAlgorithm,
@@ -1717,100 +1699,14 @@ function renderGridAlgorithm(view) {
             if (frontier.has(key)) cell.classList.add("frontier");
             if (active.has(key)) cell.classList.add(active.get(key));
             if (written.has(key)) cell.classList.add("written");
-            // Numbers beyond 2^53 print from their exact text twin.
-            const exact = view.rows_text?.[rowIndex]?.[columnIndex] ?? value;
-            cell.textContent = gridCellText(exact);
-            cell.title = `row ${rowIndex}, column ${columnIndex}: ${value === "\0" ? "unset" : String(exact)}`;
+            cell.textContent = gridCellText(value);
+            cell.title = `row ${rowIndex}, column ${columnIndex}: ${value === "\0" ? "unset" : String(value)}`;
             grid.append(cell);
         });
     });
     elements.algorithmView.append(grid);
 }
 
-// A 3D array, two layers side by side (`dp[1]`, `dp[2]`): the cell the line writes, the
-// cells it reads (usually in the layer before), and the cells it changed.
-function renderLayersAlgorithm(view) {
-    if (!view.ready) {
-        renderAlgorithmWaiting("Waiting for the program to fill its 3D table…");
-        return;
-    }
-    const layers = view.layers || [];
-    const rows = layers[0]?.rows?.length || 0;
-    const columns = Math.max(0, ...(layers[0]?.rows || []).map((row) => row.length));
-    const meta = document.createElement("div");
-    meta.className = "algorithm-meta";
-    const dimensions = document.createElement("span");
-    const [length, height, width] = view.shape || [];
-    dimensions.textContent = `${view.name}[${length}][${height}][${width}], layers ${layers.map((layer) => layer.index).join(" and ")}`
-        + `, rows 0–${rows - 1} × columns 0–${columns - 1}${view.carried ? ", last known state" : ""}`;
-    dimensions.dataset.term = "3D table";
-    const legend = [
-        ["active", "Writing", (view.current || []).length],
-        ["reading", "Reading", (view.reading || []).length],
-        ["written", "Written", (view.written || []).length],
-    ].filter(([, , shown]) => shown).map(([kind, label]) => [kind, label]);
-    meta.append(dimensions);
-    if (legend.length) meta.append(algorithmLegend(legend));
-    if ((view.details || []).length) {
-        const readouts = document.createElement("div");
-        readouts.className = "algorithm-readouts grid-readouts";
-        view.details.forEach((text) => readouts.append(textSpan(text, "algorithm-readout")));
-        meta.append(readouts);
-    }
-    elements.algorithmView.append(meta);
-
-    const key = (cell) => `${cell.layer}:${cell.row}:${cell.column}`;
-    const writing = new Set((view.current || []).map(key));
-    const reading = new Set((view.reading || []).map(key));
-    const written = new Set((view.written || []).map(key));
-
-    // Every layer gets an equal share of the width; cells include a row and a column of indexes.
-    const area = algorithmViewArea(meta);
-    const gap = 3;
-    const panelGap = 24;
-    const titleHeight = 26;
-    const panelWidth = (area.width - panelGap * Math.max(0, layers.length - 1)) / Math.max(1, layers.length);
-    const fitted = Math.floor(Math.min(
-        (panelWidth - gap * columns) / (columns + 1),
-        (area.height - titleHeight - gap * rows) / (rows + 1),
-    ));
-    const cellSize = Math.max(20, Math.min(56, fitted));
-    const longestText = Math.max(1, ...layers.flatMap((layer) => layer.rows.flat().map((value) => gridCellText(value).length)));
-    const fontSize = Math.max(8, Math.min(cellSize * 0.38, (cellSize - 6) / (longestText * 0.62)));
-
-    const panels = document.createElement("div");
-    panels.className = "layer-panels";
-    layers.forEach((layer) => {
-        const panel = document.createElement("div");
-        panel.className = "layer-panel";
-        panel.append(textSpan(`${view.name}[${layer.index}]`, "layer-title"));
-        const grid = document.createElement("div");
-        grid.className = "algorithm-grid layer-grid";
-        grid.style.setProperty("--cell", `${cellSize}px`);
-        grid.style.setProperty("--cell-font", `${fontSize.toFixed(1)}px`);
-        grid.style.gridTemplateColumns = `repeat(${columns + 1}, ${cellSize}px)`;
-        grid.append(textSpan("", "layer-axis"));
-        for (let column = 0; column < columns; column += 1) grid.append(textSpan(String(column), "layer-axis"));
-        layer.rows.forEach((row, rowIndex) => {
-            grid.append(textSpan(String(rowIndex), "layer-axis"));
-            row.forEach((value, columnIndex) => {
-                const at = `${layer.index}:${rowIndex}:${columnIndex}`;
-                const cell = document.createElement("div");
-                cell.className = "algorithm-cell";
-                if (writing.has(at)) cell.classList.add("current");
-                if (reading.has(at)) cell.classList.add("reading");
-                if (written.has(at)) cell.classList.add("written");
-                const exact = layer.rows_text?.[rowIndex]?.[columnIndex] ?? value;
-                cell.textContent = gridCellText(exact);
-                cell.title = `${view.name}[${layer.index}][${rowIndex}][${columnIndex}] = ${exact}`;
-                grid.append(cell);
-            });
-        });
-        panel.append(grid);
-        panels.append(panel);
-    });
-    elements.algorithmView.append(panels);
-}
 
 // Booleans read as T/F so a visited table fits in its cells; `.` cells read as a dot.
 // NUL is a C++ char cell nothing has written yet (a[i][0] of a 1-indexed grid): left blank.
@@ -1855,8 +1751,7 @@ function renderArrayAlgorithm(view) {
     const values = view.values || [];
     // Entries the highlighted line pushed are blue on this step only.
     const added = new Set(view.added || []);
-    // Labels print the exact digits: numbers beyond 2^53 reach the browser rounded.
-    const texts = (view.values_text || values).map(String);
+    const texts = values.map(String);
     // "Infinity" placeholders (INF = 1e9) are drawn apart and do not set the scale.
     const infinite = new Set(view.infinite || []);
     const finite = values.map(Number).filter((value, index) => !infinite.has(index) && Number.isFinite(value));
@@ -1867,7 +1762,6 @@ function renderArrayAlgorithm(view) {
         if (!markers.has(marker.index)) markers.set(marker.index, []);
         markers.get(marker.index).push(marker);
     });
-    const interval = view.interval || null;
     const written = new Set(view.written || []);
 
     const meta = indexedViewMeta(view, values.length);
@@ -1902,10 +1796,6 @@ function renderArrayAlgorithm(view) {
         column.dataset.index = String(index);
         const indexMarkers = markers.get(index) || [];
         indexMarkers.forEach((marker) => column.classList.add(marker.role));
-        // Marked indexes (for example the fixed `i` in three-sum) stay visible outside the window.
-        if (interval && !indexMarkers.length && (index < interval.low || index > interval.high)) {
-            column.classList.add("outside-bound");
-        }
         if (written.has(index)) column.classList.add("written");
         if (added.has(index)) column.classList.add("added");
         const plot = document.createElement("div");
@@ -1961,7 +1851,7 @@ function renderArrayAlgorithm(view) {
     elements.algorithmView.append(chart);
 }
 
-// Summary, read/write legend, and readouts shared by the bar and cell views.
+// Summary and read/write legend shared by the bar and cell views.
 function indexedViewMeta(view, count) {
     const meta = document.createElement("div");
     meta.className = "algorithm-meta";
@@ -1984,17 +1874,6 @@ function indexedViewMeta(view, count) {
     if (view.written?.length) legend.push(["written", "Written"]);
     if (view.added?.length) legend.push(["added", "New"]);
     if (legend.length) details.append(algorithmLegend(legend));
-    if (view.readouts?.length) {
-        const readouts = document.createElement("div");
-        readouts.className = "algorithm-readouts";
-        view.readouts.forEach((readout) => {
-            const item = document.createElement("span");
-            item.className = "algorithm-readout";
-            item.textContent = `${readout.label} = ${numberText(readout)}`;
-            readouts.append(item);
-        });
-        details.append(readouts);
-    }
     meta.append(summary, details);
     return meta;
 }
@@ -2011,7 +1890,6 @@ function renderCellsAlgorithm(view) {
         if (!markers.has(marker.index)) markers.set(marker.index, []);
         markers.get(marker.index).push(marker);
     });
-    const interval = view.interval || null;
     const written = new Set(view.written || []);
 
     const meta = indexedViewMeta(view, values.length);
@@ -2034,9 +1912,6 @@ function renderCellsAlgorithm(view) {
         item.dataset.index = String(index);
         const indexMarkers = markers.get(index) || [];
         indexMarkers.forEach((marker) => item.classList.add(marker.role));
-        if (interval && !indexMarkers.length && (index < interval.low || index > interval.high)) {
-            item.classList.add("outside-bound");
-        }
         if (written.has(index)) item.classList.add("written");
         if (added.has(index)) item.classList.add("added");
         const indexNode = document.createElement("span");
@@ -2093,22 +1968,19 @@ function renderGraphAlgorithm(view) {
     meta.className = "algorithm-meta graph-meta";
     const summary = document.createElement("span");
     summary.className = "graph-frontier";
-    const forest = view.layout === "forest";
     if (view.frontier) {
         // Whole entries when the queue holds pairs: `pq: (6, 2)  (8, 3)`.
         const entries = view.frontier.entries || view.frontier.items;
         const front = entries.length ? entries.join("  ") : "empty";
         summary.textContent = `${view.frontier.name}: ${front}`;
-    } else if (forest) {
-        summary.textContent = `${view.name}[v]: each arrow points to the parent; roots are on top`;
     } else {
         summary.textContent = `${view.name || "graph"}, ${nodes.length} vertices`;
     }
     // Whether each edge was stored one way (arrows) or both ways is guessed from the whole
     // trace; a symmetric directed graph looks undirected, so the user can override the guess.
-    const directed = forest || graphIsDirected(view);
+    const directed = graphIsDirected(view);
     const edges = directed || !view.undirected ? view.edges || [] : view.undirected.map((position) => view.edges[position]);
-    if (!forest && view.directed !== undefined) {
+    if (view.directed !== undefined) {
         summary.append(graphDirectionPicker(view));
     }
     if (view.pair_order) {
@@ -2117,7 +1989,7 @@ function renderGraphAlgorithm(view) {
         order.dataset.term = "pairs read as";
         summary.append(order);
     }
-    const legend = forest ? [["active", "Current"]] : [["active", "Current"], ["visited", "Visited"]];
+    const legend = [["active", "Current"], ["visited", "Visited"]];
     if (view.checking) legend.push(["checking", "Edge being checked"]);
     // Per-vertex entries the highlighted line reads (`dis[n]`): ringed, and printed with their value.
     const reading = new Set((view.reading || []).map((entry) => entry.vertex));
@@ -2151,10 +2023,8 @@ function renderGraphAlgorithm(view) {
     const clampX = (x) => Math.min(Math.max(nodeRadius + 2, x), width - nodeRadius - 2);
     const clampY = (y) => Math.min(Math.max(nodeRadius + 2, y), height - nodeRadius - 2);
     const positions = new Map();
-    // A forest uses its own parent arrows; a tree gets parent links from the backend.
-    const parentLinks = forest
-        ? view.edges || []
-        : Object.entries(view.parents || {}).map(([child, parent]) => ({source: child, target: parent}));
+    // A tree gets parent links from the backend.
+    const parentLinks = Object.entries(view.parents || {}).map(([child, parent]) => ({source: child, target: parent}));
     const treePositions = parentLinks.length ? layoutForest(nodes, parentLinks, width, height, nodeRadius) : new Map();
     nodes.forEach((node, index) => {
         const nodeId = String(node);
@@ -2278,7 +2148,7 @@ function renderGraphAlgorithm(view) {
         if (Object.hasOwn(labels, nodeId)) {
             // A per-vertex value such as dis[v], written beside the vertex.
             const value = svgElement("text", {class: "node-value", x: String(nodeRadius + 6), y: String(-nodeRadius + 6)});
-            value.textContent = `${view.labels.name}=${view.labels.values_text?.[nodeId] ?? labels[nodeId]}`;
+            value.textContent = `${view.labels.name}=${labels[nodeId]}`;
             group.append(value);
         }
         svg.append(group);
@@ -2386,121 +2256,6 @@ function recursionNodeText(node) {
 
 const SEGMENT_NODE = {height: 42, gapX: 10, levelGap: 34, padding: 16, charWidth: 8.4, baseHeight: 30};
 
-// A segment tree: every node with its value and range, the running node, the calls on the
-// stack, the nodes the line reads, and the original array under the leaves. Node positions
-// come from the server (`layout`), computed once per trace.
-function renderSegmentTreeAlgorithm(view) {
-    const layout = (state.result?.algorithm?.views || []).find((item) => item.renderer === "segment_tree" && item.variable === view.name)?.layout;
-    if (!layout || !view.ready) {
-        renderAlgorithmWaiting("Waiting for the tree to be built…");
-        return;
-    }
-    const nodes = layout.nodes;
-    const values = view.values || [];
-    const rangeText = (node) => (node.l === node.r ? `${node.l}` : `${node.l}..${node.r}`);
-    const longest = Math.max(
-        3,
-        ...nodes.map((node, position) => Math.max((values[position] ?? "…").length, rangeText(node).length)),
-        ...(view.base?.values || []).map((value) => (value ?? "").length),
-    );
-    const nodeWidth = Math.ceil(longest * SEGMENT_NODE.charWidth + 18);
-    const columnWidth = nodeWidth + SEGMENT_NODE.gapX;
-    const levelHeight = SEGMENT_NODE.height + SEGMENT_NODE.levelGap;
-    const pad = SEGMENT_NODE.padding;
-    // Room left of the leaves for the original array's name.
-    const gutter = view.base ? Math.ceil(view.base.name.length * SEGMENT_NODE.charWidth + 14) : 0;
-    const treeHeight = layout.depth * levelHeight - SEGMENT_NODE.levelGap;
-    const baseTop = treeHeight + 28;
-    const contentWidth = gutter + layout.columns * columnWidth - SEGMENT_NODE.gapX + pad * 2;
-    const contentHeight = (view.base ? baseTop + SEGMENT_NODE.baseHeight + 22 : treeHeight) + pad * 2;
-
-    const meta = document.createElement("div");
-    meta.className = "algorithm-meta is-sticky";
-    const summary = document.createElement("span");
-    summary.textContent = `${view.name}, ${nodes.length} nodes over [${layout.low}, ${layout.high}]${layout.truncated ? `, top ${layout.depth} levels` : ""}${view.carried ? ", last known state" : ""}`;
-    meta.append(summary, algorithmLegend([
-        ["active", "Running now"],
-        ["on-stack", "On the call path"],
-        ["reading", "Reading"],
-        ["written", "Written"],
-    ]));
-    meta.style.width = `${Math.max(0, algorithmViewArea().width)}px`;
-    elements.algorithmView.append(meta);
-
-    const area = algorithmViewArea(meta);
-    // Shrink a little to fit, but keep values readable; past 85% the panel scrolls.
-    const scale = Math.max(0.85, Math.min(1, area.width / contentWidth, area.height / contentHeight));
-    const svg = svgElement("svg", {
-        class: "segment-tree-svg",
-        viewBox: `0 0 ${contentWidth} ${contentHeight}`,
-        width: Math.round(contentWidth * scale),
-        height: Math.round(contentHeight * scale),
-    });
-    const position = (node) => ({x: pad + gutter + node.x * columnWidth, y: pad + node.depth * levelHeight});
-    const byId = new Map(nodes.map((node) => [node.id, node]));
-    const onPath = new Set(view.path || []);
-    const reading = new Set(view.reading || []);
-    const written = new Set((view.written || []).map((index) => nodes[index]?.id));
-    const childOf = (id) => (layout.root === 0 ? [id * 2 + 1, id * 2 + 2] : [id * 2, id * 2 + 1]);
-
-    nodes.forEach((node) => childOf(node.id).forEach((childId) => {
-        const child = byId.get(childId);
-        if (!child) return;
-        const from = position(node);
-        const to = position(child);
-        svg.append(svgElement("line", {
-            class: `segment-edge${onPath.has(node.id) && onPath.has(childId) ? " on-stack" : ""}`,
-            x1: from.x + nodeWidth / 2, y1: from.y + SEGMENT_NODE.height,
-            x2: to.x + nodeWidth / 2, y2: to.y,
-        }));
-    }));
-
-    nodes.forEach((node, index) => {
-        const {x, y} = position(node);
-        const classes = ["segment-node"];
-        if (node.id === view.current) classes.push("current");
-        else if (onPath.has(node.id)) classes.push("on-stack");
-        if (reading.has(node.id)) classes.push("reading");
-        if (written.has(node.id)) classes.push("written");
-        const group = svgElement("g", {class: classes.join(" "), transform: `translate(${x} ${y})`});
-        group.append(svgElement("rect", {width: nodeWidth, height: SEGMENT_NODE.height, rx: 4}));
-        const value = svgElement("text", {class: "segment-value", x: nodeWidth / 2, y: 18});
-        value.textContent = values[index] ?? "…";
-        const range = svgElement("text", {class: "segment-range", x: nodeWidth / 2, y: 34});
-        range.textContent = rangeText(node);
-        const title = svgElement("title");
-        title.textContent = `${view.name}[${node.id}] = ${values[index] ?? "not read"} · range [${node.l}, ${node.r}]`;
-        group.append(value, range, title);
-        svg.append(group);
-    });
-
-    // The original array, one cell under each leaf.
-    if (view.base) {
-        const label = svgElement("text", {class: "segment-base-label", x: pad, y: pad + baseTop + 20});
-        label.textContent = view.base.name;
-        svg.append(label);
-        nodes.filter((node) => node.l === node.r).forEach((leaf) => {
-            const {x} = position(leaf);
-            const cell = svgElement("g", {class: "segment-base", transform: `translate(${x} ${pad + baseTop})`});
-            cell.append(svgElement("rect", {width: nodeWidth, height: SEGMENT_NODE.baseHeight, rx: 3}));
-            const text = svgElement("text", {class: "segment-value", x: nodeWidth / 2, y: 20});
-            text.textContent = view.base.values[leaf.l - layout.low] ?? "";
-            cell.append(text);
-            svg.append(cell);
-        });
-    }
-
-    const wrapper = document.createElement("div");
-    wrapper.className = "segment-tree";
-    wrapper.append(svg);
-    elements.algorithmView.append(wrapper);
-
-    // Keep the running node in view when the tree is wider than the panel.
-    const running = byId.get(view.current);
-    if (running && contentWidth * scale > area.width) {
-        elements.algorithmView.scrollLeft = (position(running).x + nodeWidth / 2) * scale - area.width / 2;
-    }
-}
 
 function renderRecursionTreeAlgorithm(view) {
     const tree = state.result?.algorithm?.recursion_tree;

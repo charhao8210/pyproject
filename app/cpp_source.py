@@ -310,10 +310,6 @@ def classify_type(
     if base in FUNDAMENTAL_TYPES or base.startswith("pair<"):
         # Character arrays print as C strings, so their buffer size is not a length.
         element = "text" if base in {"char", "signed char", "unsigned char"} else ""
-        if dimensions == 3 and not element and not base.startswith("pair<"):
-            # `long long dp[1005][305][305]`: read two layers at a time (`cpp_runner._cube_commands`).
-            # Its element type tells the prelude's `pvdbg_pack` how to write the values.
-            return ("cube", "", base if base in CAST_SAFE_TYPES or base == "bool" else "")
         if dimensions > 2:
             return None
         return (("plain", "array", "matrix")[dimensions], element, "")
@@ -381,31 +377,6 @@ def fixed_array_type(type_text: str) -> tuple[str, int] | None:
         return None
     return arguments[0], int(arguments[1])
 
-
-_INTEGER_WORDS = frozenset({"int", "long", "short", "unsigned", "signed", "size_t", "int64_t", "int32_t", "uint64_t", "uint32_t"})
-
-
-def is_integer_type(type_text: str | None, aliases: dict[str, str]) -> bool:
-    """`int`, `long long`, `ll` (an alias), `unsigned`: types GDB can use as an index."""
-    if not type_text:
-        return False
-    words = _normalize_type(expand_aliases(type_text, aliases)).replace("const ", "").split()
-    return bool(words) and all(word in _INTEGER_WORDS for word in words)
-
-
-_CUBE_WRITE = r"\[\s*([A-Za-z_]\w*)\s*(?:([+-])\s*(\d+)\s*)?\]\s*\[[^\[\]]*(?:\[[^\[\]]*\][^\[\]]*)*\]\s*\[[^\[\]]*(?:\[[^\[\]]*\][^\[\]]*)*\]\s*(?:[-+*/%&|^]|<<|>>)?=(?!=)"
-
-
-def cube_layer_index(code: str, name: str) -> tuple[str, str] | None:
-    """The variable a 3D array's writes take their first index from, and that index as an
-    expression: `dp[i][j][k] = …` → ("i", "i"), `dp[i + 1][j][k] += …` → ("i", "i + 1").
-    The most frequent one wins; None when no write spells one."""
-    counts: dict[tuple[str, str], int] = {}
-    for match in re.finditer(rf"(?<![\w.]){re.escape(name)}\s*{_CUBE_WRITE}", code):
-        variable, sign, offset = match.groups()
-        expression = f"{variable} {sign} {offset}" if sign else variable
-        counts[(variable, expression)] = counts.get((variable, expression), 0) + 1
-    return max(counts, key=counts.get) if counts else None
 
 
 def expand_aliases(type_text: str, aliases: dict[str, str]) -> str:

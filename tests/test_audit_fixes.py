@@ -3,7 +3,6 @@ import shutil
 
 import pytest
 
-from app.main import _mark_large_integers
 from app.runner import run_debugger
 
 requires_cpp = pytest.mark.skipif(
@@ -187,42 +186,6 @@ def test_grid_shows_coordinates_and_queue_order() -> None:
             assert {"nr", "nc"} <= set(view["uses"])
 
 
-@requires_cpp
-def test_two_sum_pointers_mark_the_sorted_pairs_not_the_input() -> None:
-    result = run_debugger(TWO_SUM_CPP, stdin_text="4 8\n2 7 5 1\n", language="cpp")
-    assert result["algorithm"]["kind"] == "two_pointers"
-    view = next(step["visualization"] for step in result["steps"] if step["line"] == 13)
-    assert view["name"] == "pairs" and view["values"] == [1, 2, 5, 7]
-    assert {marker["label"]: marker["index"] for marker in view["markers"]} == {"l": 0, "r": 3}
-
-
-def test_python_two_sum_pointers_mark_the_sorted_pairs() -> None:
-    result = run_debugger(TWO_SUM_PY)
-    view = next(step["visualization"] for step in result["steps"] if step["line"] == 6)
-    assert view["name"] == "pairs"
-    assert result["algorithm"]["kind"] == "two_pointers"
-
-
-def test_three_sum_is_named_only_when_the_left_pointer_starts_after_an_outer_index() -> None:
-    source = (
-        "a = sorted([3, -1, 0, 2, -2])\n"
-        "target = 0\n"
-        "found = 0\n"
-        "for i in range(len(a)):\n"
-        "    l, r = i + 1, len(a) - 1\n"
-        "    while l < r:\n"
-        "        s = a[i] + a[l] + a[r]\n"
-        "        if s == target:\n"
-        "            found += 1\n"
-        "            break\n"
-        "        if s < target:\n"
-        "            l += 1\n"
-        "        else:\n"
-        "            r -= 1\n"
-        "print(found)\n"
-    )
-    assert run_debugger(source)["algorithm"]["kind"] == "three_sum"
-
 
 def test_long_list_says_how_much_is_drawn_and_names_an_index_past_it() -> None:
     view = run_debugger(LONG_ARRAY_PY)["steps"][-1]["visualization"]
@@ -237,12 +200,6 @@ def test_long_vector_reports_its_real_size() -> None:
     view = final["visualization"]
     assert view["length"] == 80 and view["beyond"] == [{"index": 70, "label": "i"}]
 
-
-def test_bar_values_beyond_2_53_keep_their_exact_digits() -> None:
-    result = run_debugger("a = [500000000000000003, 500000000000000004]\nx = a[0]\n")
-    _mark_large_integers(result)
-    view = result["steps"][-1]["visualization"]
-    assert view["values_text"] == ["500000000000000003", "500000000000000004"]
 
 
 @requires_cpp
