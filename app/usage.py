@@ -27,7 +27,8 @@ def variable_usage(
     `changed` is what the line that just ran changed; `new` names variables appearing for the
     first time in the trace (locals per function). `next` and `cells` are what the line about
     to run will change, so the step showing that line can draw its effect: `next` holds the
-    serialized value a single value will have afterwards (drawn as `old -> new`), `cells` marks
+    serialized value a single value will have afterwards and `after` the same for a container,
+    so the variables beside the view show the state after the line, like the view; `cells` marks
     the entries of a container it will change (`items`: positions in a list or dict, new
     members of a set; `cells`: `[row, column]` of a table). Both come from the frame's next
     step, after any calls the line makes have returned.
@@ -100,6 +101,8 @@ def variable_usage(
                 elif single:
                     effect["next"][name] = new
                 else:
+                    # The whole container after the line, drawn beside the view (Variables).
+                    effect["after"][name] = new
                     marks = _changed_cells(before[name], scope[name])
                     if marks:
                         if "appended" in marks:
@@ -115,6 +118,7 @@ def variable_usage(
         frame_steps[key] = index
         current = {
             "line": on_line, "changed": changed, "new": [], "appearing": {}, "next": {}, "cells": {}, "formula": {},
+            "after": {},
         }
         usage.append(current)
         # A variable's first appearance in the whole trace (a loop re-declaring it, or a later

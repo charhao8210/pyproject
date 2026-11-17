@@ -38,9 +38,9 @@ def test_adaptive_renderer_is_beside_code_and_runtime_event_is_removed() -> None
     left_column = template.index('class="left-column"')
     right_column = template.index('class="right-column"')
     adaptive_renderer = template.index('class="panel algorithm-panel"')
-    variables = template.index('class="panel variables-panel"')
     stdout = template.index('class="panel output-panel"')
-    assert left_column < right_column < adaptive_renderer < variables < stdout
+    assert left_column < right_column < adaptive_renderer < stdout
+    assert 'class="panel variables-panel"' not in template
     assert "Runtime event" not in template
     assert 'id="event-detail"' not in template
 
@@ -57,9 +57,9 @@ def test_every_workspace_panel_can_be_hidden() -> None:
     template = Path("app/templates/index.html").read_text(encoding="utf-8")
     script = Path("app/static/app.js").read_text(encoding="utf-8")
 
-    for name in ("source", "stdin", "algorithm", "variables", "stdout"):
+    for name in ("source", "stdin", "algorithm", "stdout"):
         assert f'data-panel="{name}"' in template
-    assert template.count('class="panel-action panel-toggle"') == 5
+    assert template.count('class="panel-action panel-toggle"') == 4
     assert "function setPanelExpanded" in script
     assert 'classList.toggle("left-collapsed"' in script
     assert 'classList.toggle("right-collapsed"' in script
@@ -136,11 +136,9 @@ def test_right_column_panels_can_be_resized_by_dragging_row_dividers() -> None:
     stylesheet = Path("app/static/style.css").read_text(encoding="utf-8")
 
     algorithm = template.index('class="panel algorithm-panel"')
-    variables = template.index('class="panel variables-panel"')
     stdout = template.index('class="panel output-panel"')
     first = template.index('class="row-resizer"')
-    second = template.index('class="row-resizer"', first + 1)
-    assert algorithm < first < variables < second < stdout
+    assert algorithm < first < stdout and template.count('class="row-resizer"') == 1
     assert 'aria-orientation="horizontal"' in template
     for name in ("function startRowResize", "function moveRowBoundary", "function updateRowResizers", "resetRowSizes"):
         assert name in script
@@ -152,7 +150,7 @@ def test_variables_put_single_values_in_a_row_and_fold_zero_tails() -> None:
     script = Path("app/static/app.js").read_text(encoding="utf-8")
     stylesheet = Path("app/static/style.css").read_text(encoding="utf-8")
 
-    assert 'scalars.className = "scalar-zone"' in script
+    assert 'rows.className = "scalar-zone"' in script
     assert "function isScalarValue" in script
     assert "function fillNote" in script
     assert ".scalar-zone" in stylesheet
@@ -224,13 +222,21 @@ def test_runtime_errors_timeouts_and_rejected_lines_are_marked() -> None:
     assert ".editor-error-line" in stylesheet
 
 
-def test_variables_used_or_changed_by_the_step_are_marked() -> None:
+def test_checked_variables_are_drawn_beside_the_view_without_marks() -> None:
+    # The user's design (2026-11-17): the Variables panel is gone; the variables checked in
+    # 變數 ▾ (next to View) are drawn right of the view, as they are after the line, values only.
     template = Path("app/templates/index.html").read_text(encoding="utf-8")
     script = Path("app/static/app.js").read_text(encoding="utf-8")
 
-    assert 'class="usage-legend"' in template
-    assert 'card.classList.toggle("is-on-line"' in script
-    assert 'card.classList.toggle("is-changed"' in script
+    header = template[template.index('class="panel-header algorithm-header"'):template.index('id="algorithm-inputs"')]
+    assert 'id="variable-filter-button"' in header and "變數 ▾" in header
+    body = template[template.index('id="algorithm-body"'):template.index('id="algorithm-chooser"')]
+    assert body.index('id="algorithm-view"') < body.index('id="variables"')
+    renderer = script[script.index("function renderVariables"):script.index("function refreshVariables")]
+    assert "step.usage?.after" in renderer and "step.usage?.next" in renderer
+    for mark in ('"is-on-line"', '"is-changed"', '"is-new"', "change-arrow", "formulaText", "upcomingCells"):
+        assert mark not in renderer
+    assert 'class="usage-legend"' not in template
 
 
 def test_variables_show_only_checked_names() -> None:
@@ -242,7 +248,6 @@ def test_variables_show_only_checked_names() -> None:
     assert template.index('id="variable-filter"') > template.index("</main>")
     assert "variableFilter: {all: false, pinned: new Set()}" in script
     assert "const isShown = (name) => all || pinned.has(name);" in script
-    assert "variableFilterNote(filteredOut)" in script
     assert "variable-pin" not in script  # no 📌 mark (the user's choice)
 
 
@@ -277,33 +282,7 @@ def test_variables_keep_first_seen_order_and_input_values_sit_above_the_view() -
     assert "function variableOrder" in script
     assert "function renderInputs" in script
     assert "inputNames(step)" in script
-    assert ".variable-zones.is-split" in stylesheet
-
-
-def test_variables_show_old_to_new_values_and_tint_changed_cells() -> None:
-    script = Path("app/static/app.js").read_text(encoding="utf-8")
-    style = Path("app/static/style.css").read_text(encoding="utf-8")
-
-    assert 'textSpan("->", "change-arrow")' in script
-    assert "step.usage?.next" in script and "step.usage?.cells" in script
-    assert "is-changed-cell" in script and ".table-cell.is-changed-cell" in style
-
-
-def test_new_variables_are_tinted() -> None:
-    script = Path("app/static/app.js").read_text(encoding="utf-8")
-    style = Path("app/static/style.css").read_text(encoding="utf-8")
-
-    assert "step.usage?.new" in script and 'card.classList.toggle("is-new"' in script
-    assert "step.usage?.appearing" in script
-    assert ".scalar-row.is-new" in style and ".variable-card.is-new" in style
-
-
-def test_assignments_show_their_formula() -> None:
-    script = Path("app/static/app.js").read_text(encoding="utf-8")
-
-    assert "function formulaText(" in script and "step.usage?.formula" in script
-    # Substituted forms holding a number of 10^6 or more are left out.
-    assert r"/\d{7,}/.test(substituted)" in script
+    assert ".variable-side" in stylesheet
 
 
 
@@ -338,3 +317,14 @@ def test_graph_direction_switch_pending_views_and_nested_references() -> None:
     assert "function aliasTargets" in script and ".is-alias-target" in Path("app/static/style.css").read_text(encoding="utf-8")
     assert 'term: "Edge direction"' in terms and 'term: "pairs read as"' in terms
     assert "\x00" not in script
+
+
+def test_chooser_slots_are_plain_questions_with_an_opt_out() -> None:
+    script = Path("app/static/app.js").read_text(encoding="utf-8")
+    template = Path("app/templates/index.html").read_text(encoding="utf-8")
+    assert "程式裡的變數（已幫你選好，不對再改）：" in template
+    for question in ("迷宮或圖存在哪？", "queue 是哪個？", "哪個記錄走過了？", "哪個記錄距離？", "串列從哪個開始（head）？"):
+        assert question in script
+    assert 'new Option("不用", "")' in script and '"可不選"' in script
+    # Optional slots are pre-filled only from the backend's likely names.
+    assert "state.likely[slot]" in script

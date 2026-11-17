@@ -408,6 +408,9 @@ def classify_type(
         return None
     if base == "string" and dimensions == 0:
         return ("string", "", "")
+    if base == "string" and dimensions == 1:
+        # `string s[N]` (a maze read row by row): the first entries, each a std::string.
+        return ("array", "string", "")
     if dimensions == 0 and base.startswith(("deque<", "queue<", "stack<")):
         kind = base[: base.index("<")]
         container = template_arguments(base)[1:2]

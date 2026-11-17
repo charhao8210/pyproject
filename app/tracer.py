@@ -1,16 +1,24 @@
 from __future__ import annotations
 
+import bisect as _bisect
 import builtins
+import collections as _collections
+import heapq as _heapq
 import io
+import math as _math
 import sys
 from types import FrameType, SimpleNamespace
 from typing import Any, Callable
 
 from .serializer import SerializationContext, serialize_locals, serialize_value
+from .validator import MODULE_MEMBERS, SAFE_IMPORT_MESSAGE
 
 
 USER_FILENAME = "<user_code>"
+# Steps recorded and shown. A Python program may run on for up to MAX_RUN_STEPS steps
+# (the user's choice), so it still finishes and the page says how many steps it took.
 DEFAULT_MAX_STEPS = 5_000
+MAX_RUN_STEPS = 50_000
 MAX_STDOUT_LENGTH = 100_000
 # Nested user calls allowed before the trace reports RecursionError, matching Python's default.
 MAX_RECURSION_DEPTH = 1_000
@@ -129,6 +137,14 @@ def _safe_builtins(
             raise EOFError("EOF when reading a line")
         return line.rstrip("\r\n")
 
+    # Only the listed members, so `from math import sys`-style reach into a module's own
+    # imports is impossible (the validator checks the same list).
+    modules = {
+        name: SimpleNamespace(**{member: getattr(module, member) for member in MODULE_MEMBERS[name] if hasattr(module, member)})
+        for name, module in {"heapq": _heapq, "bisect": _bisect, "collections": _collections, "math": _math}.items()
+    }
+    modules["sys"] = safe_sys
+
     def safe_import(
         name: str,
         globals: dict[str, Any] | None = None,
@@ -136,14 +152,20 @@ def _safe_builtins(
         fromlist: tuple[str, ...] = (),
         level: int = 0,
     ) -> SimpleNamespace:
-        del globals, locals, fromlist
-        if name == "sys" and level == 0:
-            return safe_sys
-        raise ImportError("Only the sys module is available for standard input.")
+        del globals, locals
+        if level != 0 or name not in modules or any(member not in MODULE_MEMBERS[name] for member in fromlist or ()):
+            raise ImportError(SAFE_IMPORT_MESSAGE)
+        return modules[name]
 
     allowed["input"] = safe_input
     allowed["__import__"] = safe_import
+    allowed["exit"] = allowed["quit"] = _exit
     return allowed
+
+
+def _exit(code: object = None) -> None:
+    """`exit()` / `sys.exit()`: the program ends normally (tracing stops there)."""
+    raise SystemExit(code)
 
 
 class ExecutionTracer:
@@ -152,11 +174,15 @@ class ExecutionTracer:
         output: CappedOutput,
         max_steps: int,
         on_step: Callable[[dict[str, Any]], None] | None = None,
+        max_recorded: int | None = None,
     ) -> None:
         if max_steps < 1:
             raise ValueError("max_steps must be at least 1")
         self.output = output
         self.max_steps = max_steps
+        self.max_recorded = max_steps if max_recorded is None else max_recorded
+        # Steps the program ran past `max_recorded`: counted, never snapshotted.
+        self.skipped = 0
         self.steps: list[dict[str, Any]] = []
         self.stopped = False
         self.on_step = on_step
@@ -169,9 +195,12 @@ class ExecutionTracer:
 
         if event == "call" and frame.f_code.co_name == "<module>":
             return self.trace
+        if event == "exception" and issubclass(arg[0], SystemExit):
+            return self.trace
 
-        if len(self.steps) >= self.max_steps - 1:
-            self._append_stopped_step(frame)
+        if len(self.steps) + self.skipped >= self.max_steps - 1:
+            if len(self.steps) < self.max_recorded:
+                self._append_stopped_step(frame)
             self.stopped = True
             raise StepLimitExceeded
 
@@ -181,10 +210,14 @@ class ExecutionTracer:
             # which is the recursive call that went too deep.
             caller = frame.f_back if frame.f_back and frame.f_back.f_code.co_filename == USER_FILENAME else frame
             error = RecursionError(RECURSION_MESSAGE)
-            self._record(self._snapshot(caller, "exception", (RecursionError, error, None)))
+            if len(self.steps) < self.max_recorded:
+                self._record(self._snapshot(caller, "exception", (RecursionError, error, None)))
             raise error
 
-        self._record(self._snapshot(frame, event, arg))
+        if len(self.steps) < self.max_recorded:
+            self._record(self._snapshot(frame, event, arg))
+        else:
+            self.skipped += 1
         return self.trace
 
     def _record(self, snapshot: dict[str, Any]) -> None:
@@ -291,12 +324,14 @@ def trace_code(
     stdin_text: str = "",
     max_steps: int = DEFAULT_MAX_STEPS,
     on_step: Callable[[dict[str, Any]], None] | None = None,
+    max_recorded: int | None = None,
 ) -> dict[str, Any]:
     output = CappedOutput()
     input_buffer = io.BytesIO(stdin_text.encode("utf-8"))
     input_stream = io.TextIOWrapper(input_buffer, encoding="utf-8", newline=None)
-    safe_sys = SimpleNamespace(stdin=input_stream)
-    tracer = ExecutionTracer(output, max_steps, on_step=on_step)
+    # The tracer keeps its own recursion limit (MAX_RECURSION_DEPTH), so setrecursionlimit does nothing.
+    safe_sys = SimpleNamespace(stdin=input_stream, exit=_exit, setrecursionlimit=lambda limit: None)
+    tracer = ExecutionTracer(output, max_steps, on_step=on_step, max_recorded=max_recorded)
     namespace: dict[str, Any] = {
         "__name__": "__main__",
         "__builtins__": _safe_builtins(input_stream, output, safe_sys),
@@ -317,21 +352,27 @@ def trace_code(
             "type": "StepLimitExceeded",
             "message": "Execution stopped: step limit exceeded",
         }
+    except SystemExit:
+        pass
     except BaseException as exception:
         status = "exception"
         error = _exception_info(type(exception), exception)
-        _ensure_unhandled_exception_is_last(tracer.steps, error, output.getvalue())
+        if not tracer.skipped:
+            _ensure_unhandled_exception_is_last(tracer.steps, error, output.getvalue())
     finally:
         sys.settrace(old_trace)
         sys.stdout = old_stdout
 
-    return {
+    result = {
         "source": source,
         "stdin": stdin_text,
         "steps": tracer.steps,
         "status": status,
         "error": error,
     }
+    if tracer.skipped:
+        result["total_steps"] = len(tracer.steps) + tracer.skipped
+    return result
 
 
 def _ensure_unhandled_exception_is_last(

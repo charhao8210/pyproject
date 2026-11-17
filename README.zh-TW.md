@@ -365,7 +365,7 @@ python -m uvicorn app.main:app --reload --port 8765
 - 沒有使用者中斷點、監看運算式、變數修改、`pdb` 整合或控制流程圖。
 - 演算法辨識採用啟發式規則；不熟悉或不明確的程式會回到一般執行畫面。
 - Python 內建的 C 實作，例如 `list.sort()`，不會公開內部比較步驟，因此只能看到排序前後狀態。
-- 單次追蹤最多保存 5,000 個快照；容器、巢狀深度與輸出長度也有上限。
+- 單次追蹤最多顯示 5,000 個快照（Python 程式最多可跑 50,000 步，畫面會說明共跑了幾步、怎麼結束）；Python 可以 import `sys`、`collections`（`deque`、`defaultdict`、`Counter`）、`heapq`、`bisect`、`math`；容器、巢狀深度與輸出長度也有上限。
 - C++ 模式依賴 GCC、GDB 與 libstdc++ 內部結構，不支援 MSVC STL 或 libc++ 的容器內部解析。
 - C++ 容器越多、資料越大，每個步驟需要的 GDB 命令就越多，也越容易達到三秒限制。
 

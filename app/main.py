@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
@@ -8,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from .cpp_runner import CppCompilationError, CppToolchainError
-from .chooser import slot_candidates
+from .chooser import ranked_candidates
 from .models import CandidatesRequest, DebugRequest, DebugResponse
 from .runner import ExecutionTimeoutError, WorkerExecutionError, run_debugger
 from .validator import SourceValidationError
@@ -57,7 +58,19 @@ async def help_page(request: Request) -> HTMLResponse:
 @app.post("/api/candidates")
 def candidates(payload: CandidatesRequest) -> dict:
     """Variables of the code that fit each chooser slot, read before Run (nothing runs)."""
-    return {"slots": slot_candidates(payload.code, payload.language)}
+    slots, likely = ranked_candidates(payload.code, payload.language)
+    return {"slots": slots, "likely": likely}
+
+
+def _with_language_hint(message: str, code: str, language: str) -> str:
+    """A beginner who left the language on the wrong one sees only C++ or Python errors."""
+    if language == "cpp":
+        wrong = not re.search(r"#\s*include|\bmain\s*\(", code) and re.search(r"\b(?:print|input)\s*\(|^\s*(?:def|import|from)\s", code, re.MULTILINE)
+        other = "Python"
+    else:
+        wrong = re.search(r"#\s*include|\bint\s+main\s*\(|\bc(?:out|in)\s*(?:<<|>>)", code)
+        other = "C++"
+    return f"{message} 這段程式看起來是 {other}，語言是不是選錯了？" if wrong else message
 
 
 @app.post("/api/debug", response_model=DebugResponse)
@@ -74,7 +87,7 @@ def debug_code(payload: DebugRequest) -> dict:
         raise HTTPException(
             status_code=422,
             detail={
-                "message": "The code cannot run.",
+                "message": _with_language_hint("The code cannot run.", payload.code, payload.language),
                 "issues": [issue.as_dict() for issue in error.issues],
             },
         ) from error
@@ -84,7 +97,7 @@ def debug_code(payload: DebugRequest) -> dict:
         raise HTTPException(
             status_code=422,
             detail={
-                "message": "Compilation failed.",
+                "message": _with_language_hint("Compilation failed.", payload.code, payload.language),
                 "issues": error.issues or [{"message": str(error), "line": None, "column": None}],
                 "output": str(error),
             },

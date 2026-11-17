@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import types
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -69,7 +70,7 @@ def serialize_value(
             "truncated": len(value) > 100,
         }
 
-    if isinstance(value, (list, tuple, dict, set, frozenset)):
+    if isinstance(value, (list, tuple, dict, set, frozenset, deque)):
         return _serialize_container(value, context, depth)
 
     if isinstance(value, types.FunctionType):
@@ -159,8 +160,11 @@ def _serialize_container(
         return {"type": "reference", "object_id": object_id}
 
     context.seen.add(object_id)
-    type_name = type(value).__name__
+    # A deque is drawn as a list (like a decoded C++ deque); defaultdict and Counter as a dict.
+    type_name = "list" if isinstance(value, deque) else "dict" if isinstance(value, dict) else type(value).__name__
     result: dict[str, Any] = {"type": type_name, "object_id": object_id}
+    if isinstance(value, deque):
+        result["class_name"] = "deque"
 
     if depth >= context.max_depth:
         result["truncated"] = True

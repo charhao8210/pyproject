@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -8,7 +9,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from .analyzer import analyze_execution
-from .tracer import DEFAULT_MAX_STEPS
+from .tracer import DEFAULT_MAX_STEPS, MAX_RUN_STEPS
 from .validator import validate_source
 
 
@@ -32,7 +33,7 @@ def run_debugger(
     stdin_text: str = "",
     language: str = "python",
     timeout_seconds: float | None = None,
-    max_steps: int = DEFAULT_MAX_STEPS,
+    max_steps: int | None = None,
     extra_views: Iterable[str] = (),
     choice: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -46,7 +47,7 @@ def run_debugger(
                 source,
                 stdin_text=stdin_text,
                 timeout_seconds=timeout_seconds,
-                max_steps=max_steps,
+                max_steps=DEFAULT_MAX_STEPS if max_steps is None else max_steps,
                 extra_views=extra_views,
                 choice=choice,
             )
@@ -56,6 +57,8 @@ def run_debugger(
         raise ValueError(f"Unsupported language: {language}")
 
     validate_source(source)
+    if max_steps is None:
+        max_steps = MAX_RUN_STEPS
     if timeout_seconds <= 0:
         raise ValueError("timeout_seconds must be positive")
     if max_steps < 1:
@@ -80,6 +83,7 @@ def run_debugger(
                 "code": source,
                 "stdin": stdin_text,
                 "max_steps": max_steps,
+                "max_recorded": min(max_steps, DEFAULT_MAX_STEPS),
                 "trace_file": trace_path.name,
             },
             ensure_ascii=False,
@@ -120,6 +124,7 @@ def run_debugger(
 
     result["language"] = "python"
     _mark_exception_origin(result["steps"])
+    _mark_input_error(result["steps"], source)
     result["algorithm"] = analyze_execution(source, result["steps"], language="python", extra_views=extra_views, choice=choice)
     return result
 
@@ -140,6 +145,19 @@ def _mark_exception_origin(steps: list[dict[str, Any]]) -> None:
     first, last = steps[origin], steps[-1]
     if (first.get("line"), first.get("function")) != (last.get("line"), last.get("function")):
         last["exception"] = {**last["exception"], "origin": {"line": first.get("line"), "function": first.get("function")}}
+
+
+def _mark_input_error(steps: list[dict[str, Any]], source: str) -> None:
+    """An EOFError, or a ValueError on a line that reads input, most likely means the test
+    data does not match what the program reads (left from another program, or empty)."""
+    error = steps[-1].get("exception") if steps and steps[-1].get("event") == "exception" else None
+    if not error or error.get("type") not in {"EOFError", "ValueError"}:
+        return
+    lines = source.splitlines()
+    line = (error.get("origin") or {}).get("line") or steps[-1].get("line") or 0
+    text = lines[line - 1] if 0 < line <= len(lines) else ""
+    if error["type"] == "EOFError" or re.search(r"\binput\s*\(|\bstdin\b", text):
+        steps[-1]["exception"] = {**error, "hint": "請確認 Test data 符合程式的輸入格式。"}
 
 
 def _recover_timeout(

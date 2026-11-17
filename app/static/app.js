@@ -58,11 +58,13 @@ const state = {
     // `choice` is the current language's. Nothing is picked until the user clicks a card.
     choice: null,
     choices: {python: null, cpp: null},
-    // Slot → candidate variable names for the code in the editor (`/api/candidates`).
+    // Slot → candidate variable names for the code in the editor (`/api/candidates`), and
+    // the ones with a real sign they fill it (`likely`), which pre-fill optional slots.
     candidates: {},
+    likely: {},
     candidatesTimer: null,
     running: false,
-    // Variables lists only `pinned` names (checked in Show ▾, kept on every step); `all` turns
+    // The side column lists only `pinned` names (checked in 變數 ▾, kept on every step); `all` turns
     // the filter off. Reset by each run.
     variableFilter: {all: false, pinned: new Set()},
     // The view the user picked; it is kept across runs and applied whenever the new trace offers it.
@@ -121,15 +123,33 @@ const ALGORITHM_CHOICES = [
     ]},
 ];
 // Each choice's slots in order: [slot, the word printed after its select].
+// Each slot is asked as a plain question, with what it draws beside it (approved mockup
+// chooser-slots-2.png, 2026-11-17). Optional slots offer 「不用」 and are pre-filled only from
+// a likely candidate; required ones take the best candidate. Order matters: a variable taken
+// by an earlier slot is not pre-filled again.
 const CHOICE_SLOTS = {
-    array: [["array", "陣列"]],
-    sorting: [["array", "陣列"]],
-    stack: [["stack", "stack"]],
-    queue: [["queue", "queue"]],
-    linked_list: [["node", "節點指標"]],
-    bfs: [["graph", "圖或迷宮"], ["queue", "queue"]],
-    dfs: [["graph", "圖或迷宮"], ["stack", "stack"]],
-    shortest_path: [["graph", "圖"], ["distance", "距離"]],
+    array: [{slot: "array", question: "要看哪個陣列？", hint: "畫成長條或一格一格"}],
+    sorting: [{slot: "array", question: "要看哪個陣列？", hint: "畫成長條，看比較和交換"}],
+    stack: [{slot: "stack", question: "stack 是哪個？", hint: "畫成直立的一疊，top 在上面"}],
+    queue: [{slot: "queue", question: "queue 是哪個？", hint: "畫成一排，左邊出、右邊進"}],
+    linked_list: [{slot: "node", question: "串列從哪個開始（head）？", hint: "畫成方塊和箭頭"}],
+    bfs: [
+        {slot: "graph", question: "迷宮或圖存在哪？", hint: "畫成格子，或點和線"},
+        {slot: "queue", question: "queue 是哪個？", hint: "畫在上面，排隊中的格子加虛線框"},
+        {slot: "visited", question: "哪個記錄走過了？", hint: "走過的格子打 ✓", optional: true},
+        {slot: "distance", question: "哪個記錄距離？", hint: "距離寫在格子上或點旁邊", optional: true},
+    ],
+    dfs: [
+        {slot: "graph", question: "迷宮或圖存在哪？", hint: "畫成格子，或點和線"},
+        {slot: "stack", question: "stack 是哪個？", hint: "用遞迴寫就選「不用」", optional: true},
+        {slot: "visited", question: "哪個記錄走過了？", hint: "走過的格子打 ✓", optional: true},
+    ],
+    shortest_path: [
+        {slot: "graph", question: "圖存在哪？", hint: "畫成點和線"},
+        {slot: "distance", question: "哪個記錄距離？", hint: "距離寫在點旁邊"},
+        {slot: "visited", question: "哪個記錄走過了？", hint: "確定的點打 ✓", optional: true},
+        {slot: "queue", question: "queue 是哪個？", hint: "畫在上面", optional: true},
+    ],
     recursion: [],
     other: [],
 };
@@ -143,7 +163,7 @@ const PLAYBACK_SPEEDS = [0.25, 0.5, 1, 1.5, 1.75, 2];
 const COLUMN_RESIZER_WIDTH = 14;
 const COLUMN_MIN_WIDTH = {left: 300, right: 480};
 // Panels in the right column never shrink below these heights while a row resizer is dragged.
-const ROW_MIN_HEIGHT = {algorithm: 140, variables: 90, stdout: 70};
+const ROW_MIN_HEIGHT = {algorithm: 140, stdout: 70};
 
 const elements = {
     runButton: document.querySelector("#run-button"),
@@ -169,7 +189,6 @@ const elements = {
     playButton: document.querySelector("#play-button"),
     speedSelect: document.querySelector("#speed-select"),
     location: document.querySelector("#current-location"),
-    functionName: document.querySelector("#function-name"),
     status: document.querySelector("#run-status"),
     message: document.querySelector("#message"),
     slider: document.querySelector("#step-slider"),
@@ -381,6 +400,7 @@ function changeLanguage(event) {
     renderEditorHighlight();
     resetTraceView();
     state.candidates = {};
+    state.likely = {};
     renderChooser();
     refreshCandidates();
     showEditor();
@@ -449,28 +469,38 @@ function pickAlgorithm(algorithm) {
     saveChoices();
 }
 
-// One select per slot of the picked algorithm, filled with the backend's candidates; the
-// picked name stays while the code still has it, otherwise the most likely one is taken.
+// One row per slot of the picked algorithm: its question, a select of the backend's
+// candidates, and what it draws. A pick (「不用」 included) stays while the code still has it;
+// otherwise the slot is pre-filled so that Run usually needs nothing more (the user's aim).
 function renderChooserSlots() {
     const slots = state.choice ? CHOICE_SLOTS[state.choice.algorithm] : [];
     elements.chooserVariables.hidden = !slots.length;
-    elements.chooserSlots.replaceChildren(...slots.flatMap(([slot, word]) => {
+    const taken = new Set();
+    elements.chooserSlots.replaceChildren(...slots.map(({slot, question, hint, optional}) => {
         const names = state.candidates[slot] || [];
         const options = names.map((name) => new Option(name, name));
-        if (state.choice.algorithm === "dfs" && slot === "stack") options.push(new Option("遞迴，沒有 stack", ""));
-        else if (!names.length) options.push(new Option("（找不到）", ""));
+        if (optional) options.push(new Option("不用", ""));
+        else if (!names.length) options.push(new Option("（這段程式沒有適合的變數）", ""));
         const select = document.createElement("select");
         select.className = "chooser-select";
-        select.setAttribute("aria-label", word);
+        select.setAttribute("aria-label", question);
         select.append(...options);
-        const picked = state.choice.variables[slot];
-        select.value = options.some((option) => option.value === picked) ? picked : options[0].value;
-        state.choice.variables[slot] = select.value;
+        const variables = state.choice.variables;
+        const kept = Object.hasOwn(variables, slot) && options.some((option) => option.value === variables[slot]);
+        const guess = (optional ? state.likely[slot] || [] : names).find((name) => !taken.has(name));
+        select.value = kept ? variables[slot] : guess ?? options[options.length - 1].value;
+        variables[slot] = select.value;
+        if (select.value) taken.add(select.value);
         select.addEventListener("change", () => {
-            state.choice.variables[slot] = select.value;
+            variables[slot] = select.value;
             saveChoices();
         });
-        return [select, textSpan(word, "chooser-slot-word")];
+        const label = textSpan(question, "chooser-slot-question");
+        if (optional) label.append(textSpan("可不選", "chooser-slot-optional"));
+        const row = document.createElement("div");
+        row.className = "chooser-slot";
+        row.append(label, select, textSpan(hint, "chooser-slot-hint"));
+        return row;
     }));
     updateRunButtons();
 }
@@ -503,6 +533,7 @@ async function refreshCandidates() {
         const payload = await response.json();
         if (code !== elements.editor.value || language !== state.language) return;
         state.candidates = payload.slots || {};
+        state.likely = payload.likely || {};
         renderChooserSlots();
         if (state.choice) saveChoices();
     } catch {
@@ -520,11 +551,10 @@ function resetTraceView() {
     elements.slider.disabled = true;
     updateTimelineButtons();
     elements.location.textContent = "Not running";
-    elements.functionName.textContent = "—";
     elements.stepLabel.textContent = "No trace";
     elements.eventLabel.textContent = "—";
-    elements.variables.className = "panel-body empty-state";
-    elements.variables.textContent = "Run the program to inspect variables.";
+    elements.variables.replaceChildren();
+    elements.variables.hidden = true;
     setVariableFilterOpen(false);
     elements.variableFilterButton.disabled = true;
     elements.stdout.innerHTML = '<span class="output-placeholder">Program output appears here.</span>';
@@ -963,7 +993,7 @@ async function runCode() {
         }
 
         if (payload.status === "completed") {
-            setStatus("success", `${payload.steps.length} steps`);
+            setStatus("success", payload.total_steps ? `${payload.steps.length} / ${payload.total_steps} steps` : `${payload.steps.length} steps`);
         } else if (payload.status === "exception") {
             setStatus("error", payload.error?.type || "Exception");
         } else if (payload.status === "timeout") {
@@ -1077,7 +1107,6 @@ function renderStep() {
     renderAlgorithm(visualization);
 
     elements.location.textContent = `Line ${step.line}`;
-    elements.functionName.textContent = step.function;
     elements.stepLabel.textContent = `Step ${state.currentStep + 1} / ${state.result.steps.length}`;
     elements.eventLabel.textContent = step.event;
     elements.eventLabel.dataset.term = step.event;
@@ -1180,139 +1209,85 @@ function renderInputs(step, visualization) {
     elements.algorithmInputs.hidden = !shown.length;
 }
 
+// The variables checked in 變數 ▾, drawn beside the view as they are after the highlighted line
+// has run (the moment the view draws), with no marks: single values share one card, a
+// container shows its values in cells (the user's design, 2026-11-17).
 function renderVariables(step, visualization) {
-    const onLine = new Set(step.usage?.line || []);
-    const changed = new Set(step.usage?.changed || []);
-    const appeared = new Set(step.usage?.new || []);
-    // What the highlighted line is about to do: the value it will leave, the entries it will write.
-    const upcoming = step.usage?.next || {};
-    const upcomingCells = step.usage?.cells || {};
-    const formulas = step.usage?.formula || {};
     const hidden = new Set([...(visualization?.uses || []).map(String), ...inputNames(step)]);
-    // Variables the highlighted line creates are listed already, with the value they will get.
+    // Variables the highlighted line creates are listed already, with the value they get.
     const locals = {...(step.locals || {})};
     const globals = {...(step.globals || {})};
     Object.entries(step.usage?.appearing || {}).forEach(([name, entry]) => {
         (entry.global ? globals : locals)[name] = entry.value;
     });
-    const allEntries = variableEntries(locals, globals, hidden);
-    // Only names checked in Show ▾ are listed (the user's choice), unless "show all" is on.
+    const after = {...(step.usage?.next || {}), ...(step.usage?.after || {})};
     const {all, pinned} = state.variableFilter;
     const isShown = (name) => all || pinned.has(name);
-    const entries = allEntries.filter(([name]) => isShown(name));
-    const filteredOut = allEntries.filter(([name]) => !isShown(name)).map(([name]) => name);
+    const entries = variableEntries(locals, globals, hidden)
+        .filter(([name]) => isShown(name))
+        .map(([name, value, isGlobal]) => [name, Object.hasOwn(after, name) ? after[name] : value, isGlobal]);
     elements.variables.replaceChildren();
-    elements.variables.className = "panel-body";
-    if (!entries.length) {
-        elements.variables.classList.add("empty-state");
-        elements.variables.textContent = allEntries.length
-            ? "按 Show ▾ 勾選要看的變數。"
-            : hidden.size
-                ? "Every variable at this step is drawn in the algorithm view."
-                : "No variables at this step.";
-        if (filteredOut.length) elements.variables.append(variableFilterNote(filteredOut));
-        return;
-    }
+    elements.variables.hidden = !entries.length;
+    if (!entries.length) return;
 
-    // Single values are rows on the left; containers sit beside them on the right, so neither
-    // pushes the other out of view. Both keep the order the variables first appeared in.
-    const zones = document.createElement("div");
-    zones.className = "variable-zones";
     const isCpp = state.language === "cpp";
-    zones.classList.toggle("is-cpp", isCpp);
-    const scalars = document.createElement("div");
-    scalars.className = "scalar-zone";
-    const containers = document.createElement("div");
-    containers.className = "container-zone";
-    entries.forEach(([name, value, isGlobal]) => {
-        const isScalar = isScalarValue(value);
-        if (isScalar && isGlobal && !scalars.querySelector(".scalar-group") && scalars.childElementCount) {
-            scalars.append(textSpan("global", "scalar-group"));
-        }
-        const card = document.createElement(isScalar ? "div" : "article");
+    const scalars = entries.filter(([, value]) => isScalarValue(value));
+    if (scalars.length) {
+        const card = document.createElement("article");
+        card.className = "variable-card";
+        const header = document.createElement("div");
+        header.className = "variable-name";
+        header.append(textSpan("單一值", "variable-label"), textSpan(step.function, "type-tag"));
+        const rows = document.createElement("div");
+        rows.className = "scalar-zone";
+        rows.classList.toggle("is-cpp", isCpp);
+        scalars.forEach(([name, value, isGlobal]) => {
+            if (isGlobal && !rows.querySelector(".scalar-group") && rows.childElementCount) {
+                rows.append(textSpan("global", "scalar-group"));
+            }
+            const row = document.createElement("div");
+            row.className = "scalar-row";
+            row.dataset.variable = name;
+            const content = document.createElement("div");
+            content.className = "value-view";
+            content.append(renderValue(value, 0));
+            if (isCpp) {
+                // Read like a C++ declaration: `bool flag false`.
+                const declared = cppTypeName(value);
+                const type = textSpan(declared.text, "type-tag");
+                type.classList.toggle("is-kind", !declared.declared);
+                if (!declared.declared) type.dataset.term = "integer";
+                row.append(type, textSpan(name, "variable-label"), content);
+            } else {
+                row.append(textSpan(name, "variable-label"), content, textSpan(displayType(value), "type-tag"));
+            }
+            rows.append(row);
+        });
+        card.append(header, rows);
+        elements.variables.append(card);
+    }
+    entries.filter(([, value]) => !isScalarValue(value)).forEach(([name, value, isGlobal]) => {
+        const card = document.createElement("article");
+        card.className = "variable-card";
         card.dataset.variable = name;
-        card.className = isScalar ? "scalar-row" : "variable-card";
-        // Yellow: used by the line about to run. Orange: changed by the line that just ran.
-        card.classList.toggle("is-on-line", onLine.has(name));
-        card.classList.toggle("is-changed", changed.has(name));
-        // Blue: shown for the first time in this trace.
-        card.classList.toggle("is-new", appeared.has(name));
-        if (appeared.has(name)) card.dataset.term = "First appearance";
-        const nameNode = textSpan(name, "variable-label");
-        const hint = isScalar ? "" : CONTAINER_HINTS[value?.class_name] || "";
-        const type = textSpan(
-            [!isScalar && isGlobal ? "global" : "", displayType(value), hint].filter(Boolean).join(" · "),
-            "type-tag",
+        const header = document.createElement("div");
+        header.className = "variable-name";
+        const hint = CONTAINER_HINTS[value?.class_name] || "";
+        header.append(
+            textSpan(name, "variable-label"),
+            textSpan([isGlobal ? "global" : "", displayType(value), hint].filter(Boolean).join(" · "), "type-tag"),
         );
         const content = document.createElement("div");
         content.className = "value-view";
-        const formula = isScalar ? formulaText(formulas[name], Object.hasOwn(upcoming, name) ? upcoming[name] : value) : "";
-        if (isScalar && Object.hasOwn(upcoming, name)) {
-            // On the line that changes it: `7 -> mid+1 = 7+1 = 8`, the value now, how the line
-            // computes the next one, and that value.
-            const before = renderValue(value, 0);
-            before.classList.add("change-before");
-            const arrow = textSpan("->", "change-arrow");
-            arrow.dataset.term = "now -> next";
-            content.append(before, arrow);
-            if (formula) content.append(textSpan(formula, "change-formula"));
-            content.append(renderValue(upcoming[name], 0));
-        } else if (formula) {
-            // A variable the line creates: `l = ma = 7`.
-            content.append(textSpan(formula, "change-formula"), renderValue(value, 0));
-        } else {
-            content.append(renderValue(value, 0, upcomingCells[name]));
-        }
-        if (isScalar && isCpp) {
-            // Read like a C++ declaration: `bool flag false`.
-            const declared = cppTypeName(value);
-            type.textContent = declared.text;
-            type.classList.toggle("is-kind", !declared.declared);
-            if (!declared.declared) type.dataset.term = "integer";
-            card.append(type, nameNode, content);
-            scalars.append(card);
-        } else if (isScalar) {
-            card.append(nameNode, content, type);
-            scalars.append(card);
-        } else {
-            const header = document.createElement("div");
-            header.className = "variable-name";
-            header.append(nameNode, type);
-            card.append(header, content);
-            containers.append(card);
-        }
+        content.append(renderValue(value, 0));
+        card.append(header, content);
+        elements.variables.append(card);
     });
-    if (scalars.childElementCount) zones.append(scalars);
-    if (containers.childElementCount) zones.append(containers);
-    zones.classList.toggle("is-split", zones.childElementCount === 2);
-    elements.variables.classList.add("has-zones");
-    elements.variables.append(zones);
-    if (filteredOut.length) elements.variables.append(variableFilterNote(filteredOut));
 }
 
 function refreshVariables() {
     const step = state.result?.steps[state.currentStep];
     if (step) renderVariables(step, currentVisualization(step));
-}
-
-// `另有 6 個沒顯示：n k mid …` under the variables, with a switch that turns the filter off.
-function variableFilterNote(names) {
-    const note = document.createElement("div");
-    note.className = "variable-filter-note";
-    const listed = names.length > 8 ? [...names.slice(0, 8), "…"] : names;
-    const text = textSpan(`另有 ${names.length} 個沒顯示：`, "");
-    text.append(textSpan(listed.join(" "), "variable-filter-names"));
-    const showAll = document.createElement("button");
-    showAll.type = "button";
-    showAll.className = "variable-filter-link";
-    showAll.textContent = "全部顯示";
-    showAll.addEventListener("click", () => {
-        state.variableFilter.all = true;
-        refreshVariables();
-        if (!elements.variableFilter.hidden) renderVariableFilter();
-    });
-    note.append(text, showAll);
-    return note;
 }
 
 function setVariableFilterOpen(open) {
@@ -1395,7 +1370,7 @@ function renderVariableFilter() {
         });
     });
     if (!variables.length) picker.append(textSpan("這次執行沒有可以選的變數。", "variable-filter-foot"));
-    picker.append(textSpan("只有勾選的變數會顯示，每一步都在。", "variable-filter-foot"));
+    picker.append(textSpan("勾選的變數會畫在圖的右邊，每一步都在。", "variable-filter-foot"));
 }
 
 function changeVariableFilter(event) {
@@ -1404,20 +1379,6 @@ function changeVariableFilter(event) {
     else if (input.checked) state.variableFilter.pinned.add(input.value);
     else state.variableFilter.pinned.delete(input.value);
     refreshVariables();
-}
-
-// `mid+1 = 7+1 = ` in front of the value a line assigns. A bare number (`ma = 0`, `r = 1e18`)
-// shows only the result, and the substituted form is left out when it adds nothing or holds a
-// number of 10^6 or more (`(7+1000000000000000000)/2` is unreadable; the user's choice).
-function formulaText(formula, result) {
-    if (!formula || /^[-+]?[\d.][\w.']*$/.test(formula.expression.trim())) return "";
-    const resultText = compactValue(result);
-    // `flag = false`: a literal that is already the value adds nothing.
-    if (formula.expression.trim() === resultText) return "";
-    const parts = [formula.expression];
-    const substituted = formula.substituted;
-    if (substituted !== formula.expression && substituted !== resultText && !/\d{7,}/.test(substituted)) parts.push(substituted);
-    return `${parts.join(" = ")} = `;
 }
 
 // The type a C++ variable was declared with (`long long`, `string`), from the tracer's `c_type`.
@@ -1930,7 +1891,9 @@ function renderOutput(stdout) {
 
 function renderRuntimeMessage(step) {
     if (!step.exception) {
-        setMessage(cappedNote(step), "note");
+        const hidden = hiddenStepsNote(step);
+        if (hidden) setMessage(hidden.text, hidden.kind);
+        else setMessage(cappedNote(step), "note");
         return;
     }
     const {type, message} = step.exception;
@@ -1938,13 +1901,30 @@ function renderRuntimeMessage(step) {
         const reason = type === "StepLimitExceeded"
             ? "the program was stopped after the step limit"
             : message || "the program ran too long";
-        setMessage(`TLE at line ${step.line}: ${reason}. This is where it was running when it stopped.`, "tle");
+        setMessage(`TLE at line ${step.line}: ${reason}. This is where it was running when it stopped.\n`
+            + `只顯示到停止前的 ${state.result.steps.length} 步，請用更小的測資。`, "tle");
         return;
     }
     // A Python exception that unwound through callers names the line that raised it.
     const origin = step.exception.origin;
     const raised = origin ? ` (raised at line ${origin.line} in ${origin.function})` : "";
-    setMessage(`RE at line ${step.line}: ${type}: ${message || "No message"}${raised}`);
+    const hint = step.exception.hint ? `\n${step.exception.hint}` : "";
+    setMessage(`RE at line ${step.line}: ${type}: ${message || "No message"}${raised}${hint}`);
+}
+
+// A Python program may run past the recorded steps (`total_steps`): the last recorded step
+// says how the rest of the run ended.
+function hiddenStepsNote(step) {
+    const result = state.result;
+    if (!result?.total_steps || step !== result.steps[result.steps.length - 1]) return null;
+    const shown = `只顯示前 ${result.steps.length} 步`;
+    if (result.status === "step_limit") {
+        return {kind: "tle", text: `${shown}；程式執行超過 ${result.total_steps} 步仍未結束，已停止（TLE）。`};
+    }
+    if (result.status === "exception") {
+        return {kind: "error", text: `${shown}；程式執行到第 ${result.total_steps} 步時發生 RE：${result.error.type}: ${result.error.message}`};
+    }
+    return {kind: "note", text: `${shown}；程式共執行 ${result.total_steps} 步後正常結束。想看完整過程請用更小的測資。`};
 }
 
 function renderAlgorithmProfile(profile) {
@@ -1980,6 +1960,12 @@ function renderAlgorithm(visualization) {
     }
     if (!visualization) {
         renderAlgorithmWaiting("No visualization state is available for this step.");
+        return;
+    }
+    if ("waiting" in visualization) {
+        renderAlgorithmWaiting(visualization.renderer === "recursion_tree"
+            ? `還沒有遞迴呼叫，請往後拉步驟（第 ${visualization.first_step} 步開始有）。`
+            : `${visualization.waiting} 還沒有資料，請往後拉步驟（第 ${visualization.first_step} 步開始有）。`);
         return;
     }
     if ("missing" in visualization) {
@@ -3061,11 +3047,10 @@ function renderExecutionAlgorithm(view) {
 function renderEmptyTrace() {
     renderSource(0);
     elements.location.textContent = "Finished";
-    elements.functionName.textContent = "—";
     elements.stepLabel.textContent = "No trace events";
     elements.eventLabel.textContent = "—";
-    elements.variables.className = "panel-body empty-state";
-    elements.variables.textContent = "This program produced no trace events.";
+    elements.variables.replaceChildren();
+    elements.variables.hidden = true;
     renderOutput("");
     elements.algorithmView.replaceChildren();
     elements.algorithmView.className = "algorithm-canvas";

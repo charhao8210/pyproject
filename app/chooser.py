@@ -21,22 +21,32 @@ CHOICES: dict[str, tuple[str, tuple[str, ...]]] = {
     "stack": ("Stack", ("stack",)),
     "queue": ("Queue", ("queue",)),
     "linked_list": ("Linked List", ("node",)),
-    "bfs": ("BFS", ("graph", "queue")),
-    "dfs": ("DFS", ("graph", "stack")),
-    "shortest_path": ("Shortest path", ("graph", "distance")),
+    "bfs": ("BFS", ("graph", "queue", "visited", "distance")),
+    "dfs": ("DFS", ("graph", "stack", "visited")),
+    "shortest_path": ("Shortest path", ("graph", "distance", "visited", "queue")),
     "recursion": ("Recursion", ()),
     "other": ("Other", ()),
 }
-SLOTS = ("array", "graph", "queue", "stack", "node", "distance")
+SLOTS = ("array", "graph", "queue", "stack", "node", "distance", "visited")
+# Slots the user may leave empty (「不用」): nothing is drawn for them then. They are pre-filled
+# only from a `likely` candidate, so a wrong guess does not tick cells (2026-11-17 design).
+OPTIONAL_SLOTS = {
+    ("bfs", "visited"), ("bfs", "distance"),
+    ("dfs", "stack"), ("dfs", "visited"),
+    ("shortest_path", "visited"), ("shortest_path", "queue"),
+}
 
 # Which shapes of variable fit each slot, and the names put first.
 _FITS = {
-    "array": ("1d",),
-    "graph": ("2d", "rows", "map"),
+    # A set is drawn as bars of its sorted values, a list of lists as one cell per row.
+    "array": ("1d", "set", "2d"),
+    # A character map (`char a[N][M]`, `vector<string>`) before number tables (`dist`, `vis`).
+    "graph": ("rows", "2d", "map"),
     "queue": ("queue", "1d"),
     "stack": ("stack", "1d"),
     "node": ("node",),
-    "distance": ("1d",),
+    "distance": ("1d", "2d"),
+    "visited": ("2d", "1d", "set"),
 }
 _PREFERRED = {
     "array": ("arr", "a", "nums", "values", "data"),
@@ -44,29 +54,40 @@ _PREFERRED = {
     "queue": ("q", "queue", "que", "frontier", "dq"),
     "stack": ("st", "stack", "stk", "s"),
     "node": ("head", "root", "first"),
-    "distance": ("dist", "dis", "distance", "d", "dp", "depth", "level"),
+    "distance": ("dist", "dis", "distance", "d", "dp", "depth", "level", "step", "steps", "cost", "time"),
+    "visited": ("vis", "visited", "seen", "used", "done", "mark", "marked", "went", "vst", "book", "inq"),
 }
 
 
 def slot_candidates(source: str, language: str) -> dict[str, list[str]]:
     """Slot → variable names of the code that fit it, most likely first."""
+    return ranked_candidates(source, language)[0]
+
+
+def ranked_candidates(source: str, language: str) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+    """`slot_candidates` plus, per slot, the names with a real sign they fill it: used that
+    way (`q.pop()`) or named for it (`vis`). Optional slots are pre-filled only from those."""
     try:
         shapes = _cpp_shapes(source) if language == "cpp" else _python_shapes(source)
     except (SyntaxError, ValueError):
         shapes = {}
     kinds = container_kinds(source, language)
     result = {}
+    likely = {}
     for slot in SLOTS:
         fits = _FITS[slot]
-        names = [name for name, shape in shapes.items() if shape in fits]
+        # A list used as a queue holds whatever it holds (`todo = [[0, 1]]`, cells of a maze).
+        names = [name for name, shape in shapes.items() if shape in fits or kinds.get(name) == slot]
 
         def rank(name: str, slot: str = slot, fits: tuple[str, ...] = fits) -> tuple[int, int, int]:
             used_as = 0 if kinds.get(name) == slot or shapes[name] == slot else 1
             preferred = _PREFERRED[slot]
-            return (used_as, preferred.index(name) if name in preferred else len(preferred), fits.index(shapes[name]))
+            shape = fits.index(shapes[name]) if shapes[name] in fits else 0
+            return (used_as, preferred.index(name) if name in preferred else len(preferred), shape)
 
         result[slot] = sorted(names, key=rank)
-    return result
+        likely[slot] = [name for name in result[slot] if rank(name)[0] == 0 or name in _PREFERRED[slot]]
+    return result, likely
 
 
 def _python_shapes(source: str) -> dict[str, str]:
@@ -107,20 +128,24 @@ def _python_shape(value: ast.expr, node_classes: set[str]) -> str | None:
         ) or (isinstance(element, ast.Call) and isinstance(element.func, ast.Name) and element.func.id == "list")
 
     def is_text(element: ast.expr) -> bool:
+        if isinstance(element, ast.Call) and isinstance(element.func, ast.Name) and element.func.id == "list" and element.args:
+            element = element.args[0]  # `list(input())`: a row of characters
         return (isinstance(element, ast.Constant) and isinstance(element.value, str)) or (
             isinstance(element, ast.Call) and isinstance(element.func, ast.Name) and element.func.id == "input"
         )
 
     if isinstance(value, ast.List):
-        if value.elts and all(is_rows(element) for element in value.elts):
-            return "2d"
-        return "rows" if value.elts and all(is_text(element) for element in value.elts) else "1d"
+        if value.elts and all(is_text(element) for element in value.elts):
+            return "rows"
+        return "2d" if value.elts and all(is_rows(element) for element in value.elts) else "1d"
     if isinstance(value, ast.ListComp):
-        return "2d" if is_rows(value.elt) else "rows" if is_text(value.elt) else "1d"
+        return "rows" if is_text(value.elt) else "2d" if is_rows(value.elt) else "1d"
     if isinstance(value, ast.BinOp) and isinstance(value.op, ast.Mult) and isinstance(value.left, ast.List):
         return "2d" if any(is_rows(element) for element in value.left.elts) else "1d"
     if isinstance(value, (ast.Dict, ast.DictComp)):
         return "map"
+    if isinstance(value, (ast.Set, ast.SetComp)):
+        return "set"
     if isinstance(value, ast.Attribute) and value.attr == "next" and node_classes:
         return "node"
     if isinstance(value, ast.Call):
@@ -132,6 +157,8 @@ def _python_shape(value: ast.expr, node_classes: set[str]) -> str | None:
             return "queue"
         if called in {"dict", "defaultdict"}:
             return "map"
+        if called in {"set", "frozenset"}:
+            return "set"
         if called in {"list", "sorted", "split"}:
             return "1d"
     return None
@@ -167,10 +194,14 @@ def _cpp_shapes(source: str) -> dict[str, str]:
         kind = classified[0] if classified else None
         if kind == "array" and classified[1] == "text":
             continue  # a C string
+        if kind == "matrix" and classified[1] == "text":
+            shapes[name] = "rows"  # `char a[N][M]`: a character map
+            continue
         shape = {
             "array": "1d", "vector": "1d", "bits": "1d",
             "matrix": "2d", "nested": "2d", "vector_array": "2d",
             "queue": "queue", "deque": "queue", "stack": "stack", "list": "node",
+            "set": "set", "multiset": "set",
         }.get(kind or "")
         if shape:
             shapes[name] = shape

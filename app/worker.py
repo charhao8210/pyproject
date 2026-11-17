@@ -16,6 +16,7 @@ def main() -> None:
     source = payload.get("code", "")
     stdin_text = payload.get("stdin", "")
     max_steps = int(payload.get("max_steps", DEFAULT_MAX_STEPS))
+    max_recorded = int(payload.get("max_recorded", max_steps))
     trace_file = payload.get("trace_file")
 
     checkpoint = None
@@ -36,6 +37,7 @@ def main() -> None:
             source,
             stdin_text=stdin_text,
             max_steps=max_steps,
+            max_recorded=max_recorded,
             on_step=on_step,
         )
     except SourceValidationError as error:

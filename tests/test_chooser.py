@@ -6,7 +6,7 @@ import shutil
 import pytest
 from fastapi.testclient import TestClient
 
-from app.chooser import slot_candidates
+from app.chooser import ranked_candidates, slot_candidates
 from app.main import app
 from app.runner import run_debugger
 
@@ -60,7 +60,8 @@ def test_python_slots_are_filled_from_the_code() -> None:
     assert slots["graph"][0] == "graph"
     assert slots["queue"][0] == "q"
     assert slots["distance"][0] == "dist" and "best" in slots["distance"]
-    assert "graph" not in slots["array"] and "dist" in slots["array"]
+    # Lists of lists are offered too (mvp-test-issues #6), after the 1D lists.
+    assert "dist" in slots["array"] and slots["array"][-1] == "graph"
     assert slots["node"] == []
 
 
@@ -72,7 +73,7 @@ def test_python_node_variables_fill_the_linked_list_slot() -> None:
 def test_cpp_slots_are_filled_from_declarations() -> None:
     slots = slot_candidates(CPP_DECLARATIONS, "cpp")
     assert slots["graph"][0] == "g" and {"adj", "maze", "grid"} <= set(slots["graph"])
-    assert {"a", "dis", "arr"} <= set(slots["array"]) and "g" not in slots["array"]
+    assert {"a", "dis", "arr"} <= set(slots["array"][:3]) and "g" in slots["array"][3:]
     assert slots["queue"][0] == "q" and "pq" not in slots["queue"]
     assert slots["stack"][0] == "st"
     assert slots["distance"][0] == "dis"
@@ -82,7 +83,7 @@ def test_cpp_slots_are_filled_from_declarations() -> None:
 
 def test_broken_code_has_no_candidates() -> None:
     assert slot_candidates("def broken(:\n", "python") == {
-        "array": [], "graph": [], "queue": [], "stack": [], "node": [], "distance": [],
+        "array": [], "graph": [], "queue": [], "stack": [], "node": [], "distance": [], "visited": [],
     }
 
 
@@ -190,3 +191,62 @@ def test_the_page_has_the_chooser() -> None:
     assert 'view.renderer === "stack" ? stackBody(view) : queueBody(view)' in script
     assert '"picked before Run"' in (root / "app" / "static" / "terms.js").read_text(encoding="utf-8")
     assert "Run as" in (root / "app" / "templates" / "help.html").read_text(encoding="utf-8")
+
+
+# Chooser slots (approved 2026-11-17, mockup chooser-slots-2.png): optional slots ("visited",
+# "distance") pre-fill only from a likely name, and a pick is drawn whatever its name.
+
+PY_MAZE_BFS = """grid = ["#...", "#.#.", "...."]
+b = [[0] * 4 for _ in range(3)]
+step = [[-1] * 4 for _ in range(3)]
+dirs = [[0, 1], [1, 0], [0, -1], [-1, 0]]
+todo = [[0, 1]]
+b[0][1] = 1
+step[0][1] = 0
+while todo:
+    r, c = todo.pop(0)
+    for dr, dc in dirs:
+        nr, nc = r + dr, c + dc
+        if 0 <= nr < 3 and 0 <= nc < 4 and grid[nr][nc] == "." and not b[nr][nc]:
+            b[nr][nc] = 1
+            step[nr][nc] = step[r][c] + 1
+            todo.append([nr, nc])
+"""
+
+
+def test_a_map_ranks_first_and_optional_slots_guess_only_likely_names() -> None:
+    slots, likely = ranked_candidates(PY_MAZE_BFS, "python")
+    assert slots["graph"][0] == "grid"
+    assert "b" in slots["visited"] and likely["visited"] == []
+    assert likely["distance"] == ["step"]
+    assert likely["queue"] == ["todo"]
+
+
+def test_bfs_ticks_the_picked_visited_table_and_boxes_the_picked_queue() -> None:
+    choice = {"graph": "grid", "queue": "todo", "visited": "b", "distance": "step"}
+    views = _ready(run_debugger(PY_MAZE_BFS, choice={"algorithm": "bfs", "variables": choice}))
+    assert views and all(view["renderer"] == "grid" for view in views)
+    last = views[-1]
+    ticked = {(r, c) for r, row in enumerate(last["visited"]) for c, cell in enumerate(row) if cell}
+    assert (0, 1) in ticked and (2, 0) in ticked and (1, 2) not in ticked
+    # The distance table is written on the map's open cells; walls keep their `#`.
+    assert last["rows"][0][3] == 2 and last["rows"][0][0] == "#"
+    boxed = [view for view in views if view["frontier"]]
+    assert boxed and all({(cell["row"], cell["column"]) for cell in view["frontier"]} <= {(r, c) for r in range(3) for c in range(4)} for view in boxed)
+    # `dirs` holds pairs too, but only the picked queue is the frontier.
+    assert all(view["queue"] is None or view["queue"]["name"] == "todo" for view in views)
+
+
+def test_bfs_without_a_visited_pick_ticks_nothing() -> None:
+    choice = {"graph": "grid", "queue": "todo", "visited": "", "distance": ""}
+    views = _ready(run_debugger(PY_MAZE_BFS, choice={"algorithm": "bfs", "variables": choice}))
+    assert views and not any(any(row) for view in views for row in view["visited"])
+    assert all(isinstance(cell, str) for view in views for row in view["rows"] for cell in row)
+
+
+def test_a_graph_ticks_the_picked_visited_array_under_any_name() -> None:
+    code = PY_BFS.replace("dist", "zz")
+    choice = {"graph": "graph", "queue": "q", "visited": "zz", "distance": ""}
+    views = _ready(run_debugger(code, choice={"algorithm": "bfs", "variables": choice}))
+    assert sorted(views[-1]["visited"]) == ["0", "1", "2", "3"]
+    assert all(view["labels"] is None for view in views)

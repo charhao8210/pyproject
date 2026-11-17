@@ -140,22 +140,27 @@ main()</textarea>
                                     </select>
                                 </label>
                                 <select id="view-variable-select" class="view-variable-select" aria-label="Variable to draw" hidden></select>
+                                <button id="variable-filter-button" class="panel-action" type="button" aria-expanded="false" aria-controls="variable-filter" disabled>變數 ▾</button>
                                 <span id="algorithm-confidence" class="confidence-badge" data-term="guessed from the code">Not analyzed</span>
                                 <span id="algorithm-evidence" class="panel-meta">Run code to detect its structure</span>
-                                <button class="panel-action panel-toggle" type="button" aria-expanded="true" aria-controls="algorithm-view">Hide</button>
+                                <button class="panel-action panel-toggle" type="button" aria-expanded="true" aria-controls="algorithm-body">Hide</button>
                             </div>
                         </div>
                         <div id="algorithm-inputs" class="algorithm-inputs" aria-label="Input values" data-term="Input values" hidden></div>
-                        <div id="algorithm-view" class="algorithm-canvas empty-state">
-                            Run the program to see its data structure drawn here.
+                        <div id="algorithm-body" class="algorithm-body">
+                            <div id="algorithm-view" class="algorithm-canvas empty-state">
+                                Run the program to see its data structure drawn here.
+                            </div>
+                            <!-- The variables checked in 變數 ▾, as they are after the highlighted line. -->
+                            <aside id="variables" class="variable-side" aria-label="Variables" hidden></aside>
                         </div>
                         <div id="algorithm-chooser" class="algorithm-chooser" hidden>
                             <h3 class="chooser-title">這個程式在做什麼？</h3>
                             <p class="chooser-hint">選一個，按 Run 之後右邊就照這個畫。</p>
                             <div id="chooser-groups" class="chooser-groups"></div>
                             <div id="chooser-variables" class="chooser-variables" hidden>
-                                <span>要畫的變數：</span>
-                                <span id="chooser-slots" class="chooser-slots"></span>
+                                <span class="chooser-slots-title">程式裡的變數（已幫你選好，不對再改）：</span>
+                                <div id="chooser-slots" class="chooser-slots"></div>
                             </div>
                             <button id="chooser-run-button" class="button primary chooser-run" type="button" disabled>
                                 <span class="run-icon" aria-hidden="true">▶</span>
@@ -164,27 +169,7 @@ main()</textarea>
                         </div>
                     </section>
 
-                    <div class="row-resizer" role="separator" aria-orientation="horizontal" aria-label="Resize visualization and variables" tabindex="0" title="Drag to resize. Double-click to reset."></div>
-
-                    <section class="panel variables-panel" data-panel="variables">
-                        <div class="panel-header">
-                            <h2>Variables</h2>
-                            <div class="panel-tools">
-                                <span class="usage-legend">
-                                    <span data-term="Used on this line"><span class="usage-swatch on-line" aria-hidden="true"></span>Used on this line</span>
-                                    <span data-term="Changed by the last line"><span class="usage-swatch changed" aria-hidden="true"></span>Changed by the last line</span>
-                                </span>
-                                <span id="function-name" class="panel-meta" data-term="Function">—</span>
-                                <button id="variable-filter-button" class="panel-action" type="button" aria-expanded="false" aria-controls="variable-filter" disabled>Show ▾</button>
-                                <button class="panel-action panel-toggle" type="button" aria-expanded="true" aria-controls="variables">Hide</button>
-                            </div>
-                        </div>
-                        <div id="variables" class="panel-body empty-state">
-                            Run the program to inspect variables.
-                        </div>
-                    </section>
-
-                    <div class="row-resizer" role="separator" aria-orientation="horizontal" aria-label="Resize variables and stdout" tabindex="0" title="Drag to resize. Double-click to reset."></div>
+                    <div class="row-resizer" role="separator" aria-orientation="horizontal" aria-label="Resize visualization and stdout" tabindex="0" title="Drag to resize. Double-click to reset."></div>
 
                     <section class="panel output-panel" data-panel="stdout">
                         <div class="panel-header">

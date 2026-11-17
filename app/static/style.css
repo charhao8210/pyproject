@@ -366,7 +366,6 @@ h1 {
 .source-panel { flex: 1 1 0; }
 .stdin-panel { flex: 0 0 auto; }
 .algorithm-panel { flex: 3 1 0; }
-.variables-panel { flex: 2 1 0; }
 .output-panel { flex: 0 0 auto; }
 
 /* A collapsed panel keeps only its header; the open panels share the space. */
@@ -375,7 +374,7 @@ h1 {
 }
 
 .left-column:has(.source-panel.is-collapsed) .stdin-panel:not(.is-collapsed),
-.right-column:not(:has(.algorithm-panel:not(.is-collapsed), .variables-panel:not(.is-collapsed))) .output-panel:not(.is-collapsed) {
+.right-column:not(:has(.algorithm-panel:not(.is-collapsed))) .output-panel:not(.is-collapsed) {
     flex: 1 1 0;
 }
 
@@ -881,20 +880,6 @@ h2 {
 
 /* ---------- Variables: a trace table ---------- */
 
-/*
- * Two zones: single values as rows on the left, containers stacked on the right. Each zone
- * scrolls on its own, so a tall array never pushes the single values out of view.
- */
-.variables-panel {
-    container-type: inline-size;
-}
-
-#variables.has-zones {
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-}
-
 /* Show ▾: only the names checked here are listed in Variables, on every step. */
 .panel-action.is-open {
     color: var(--paper);
@@ -990,62 +975,55 @@ h2 {
     line-height: 1.5;
 }
 
-.variable-filter-note {
+/* The variables checked in 變數 ▾, right of the view (the user's design, 2026-11-17): one card
+   for every single value, one per container, values only (no marks). */
+.algorithm-body {
     display: flex;
-    flex: none;
-    justify-content: space-between;
-    gap: 10px;
-    margin-top: 10px;
-    padding: 6px 10px;
-    border: 1px dashed var(--rule);
-    border-radius: var(--radius);
-    color: var(--pencil-muted);
-    font-size: 12px;
-    text-align: left;
-}
-
-.variable-filter-names {
-    color: var(--pencil-faint);
-    font-family: var(--mono);
-}
-
-.variable-zones {
-    display: grid;
-    flex: 1 1 auto;
     min-height: 0;
-    grid-template-columns: minmax(0, 1fr);
+    flex: 1 1 auto;
 }
 
-.variable-zones.is-split {
-    grid-template-columns: minmax(190px, 1fr) minmax(0, 2.2fr);
-    gap: 18px;
+.algorithm-body[hidden],
+.variable-side[hidden] {
+    display: none;
 }
 
-.scalar-zone,
-.container-zone {
+.algorithm-body > .algorithm-canvas {
     min-width: 0;
+}
+
+.variable-side {
+    display: flex;
+    flex: 0 0 clamp(240px, 32%, 460px);
+    flex-direction: column;
+    gap: 10px;
     min-height: 0;
     overflow-x: hidden;
     overflow-y: auto;
+    padding: 12px 14px;
+    border-left: 1px solid var(--rule);
+    background: var(--sheet);
 }
 
-/* Name, value, and type line up in columns across the rows. */
+.variable-side .variable-card {
+    flex: none;
+    min-width: 0;
+    padding: 0 10px 2px;
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+}
+
+/* Type, name and value line up in columns across the rows (Python: name, value, type). */
 .scalar-zone {
     display: grid;
     align-content: start;
     grid-template-columns: max-content minmax(0, max-content) minmax(0, 1fr);
     column-gap: 12px;
+    padding-bottom: 6px;
 }
 
-/* With no containers, the rows flow into as many columns as fit. */
-.variable-zones:not(.is-split) .scalar-zone {
-    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-}
-
-.variable-zones:not(.is-split) .scalar-row {
-    grid-column: auto;
-    grid-template-columns: max-content minmax(0, max-content) minmax(0, 1fr);
-    column-gap: 12px;
+.scalar-zone.is-cpp {
+    grid-template-columns: max-content max-content minmax(0, 1fr);
 }
 
 .scalar-row {
@@ -1053,24 +1031,17 @@ h2 {
     grid-column: span 3;
     grid-template-columns: subgrid;
     align-items: baseline;
-    padding: 4px 0 4px 8px;
+    padding: 3px 0;
     border-bottom: 1px solid var(--rule-faint);
-    border-left: 3px solid transparent;
 }
 
-/* C++ rows read like declarations: type, name, value. */
-.variable-zones.is-cpp.is-split .scalar-zone,
-.variable-zones.is-cpp:not(.is-split) .scalar-row {
-    grid-template-columns: max-content max-content minmax(0, 1fr);
-}
-
-.variable-zones.is-cpp .scalar-row .type-tag {
+.scalar-zone.is-cpp .scalar-row .type-tag {
     font-family: var(--mono);
     font-size: 14px;
 }
 
 /* No declaration found: the kind of value (`integer`), in italics so it does not pass for a type. */
-.variable-zones.is-cpp .scalar-row .type-tag.is-kind {
+.scalar-zone.is-cpp .scalar-row .type-tag.is-kind {
     font-family: var(--sans);
     font-size: 12px;
     font-style: italic;
@@ -1087,55 +1058,11 @@ h2 {
     padding: 0;
 }
 
-.scalar-row.is-on-line .variable-label {
-    margin-left: -4px;
-    padding: 0 4px;
-    border-radius: 2px;
-    color: var(--on-highlighter);
-    background: var(--highlighter);
-}
-
-.scalar-row.is-changed {
-    border-left-color: var(--write);
-}
-
-.scalar-row.is-changed .value-view {
-    color: var(--write);
-}
-
 .scalar-group {
     grid-column: 1 / -1;
-    padding: 10px 0 2px;
+    padding: 8px 0 2px;
     color: var(--pencil-faint);
     font-size: 12px;
-}
-
-.container-zone {
-    display: grid;
-    align-content: start;
-    gap: 6px;
-}
-
-.variable-card {
-    min-width: 0;
-    border-top: 1px solid var(--rule);
-}
-
-/* A narrow panel stacks the zones and scrolls as one. */
-@container (max-width: 520px) {
-    #variables.has-zones {
-        display: block;
-        overflow-y: auto;
-    }
-
-    .variable-zones.is-split {
-        grid-template-columns: minmax(0, 1fr);
-    }
-
-    .scalar-zone,
-    .container-zone {
-        overflow: visible;
-    }
 }
 
 .fill-note {
@@ -1155,76 +1082,6 @@ h2 {
     font-family: var(--mono);
     font-size: 14px;
     font-weight: 700;
-}
-
-/* Used on this line: the name gets the highlighter. Changed by the last line: orange. */
-.usage-legend {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    color: var(--pencil-muted);
-    font-size: 12px;
-    white-space: nowrap;
-}
-
-/* Each legend entry is its own hover target (`data-term`), swatch and words together. */
-.usage-legend > span {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-}
-
-.usage-swatch {
-    display: inline-block;
-    width: 12px;
-    height: 12px;
-    margin-left: 6px;
-    border-radius: 2px;
-}
-
-.usage-swatch.on-line { background: var(--highlighter); }
-.usage-swatch.changed { border: 2px solid var(--write); }
-
-.variable-card.is-on-line .variable-label {
-    margin-left: -4px;
-    padding: 0 4px;
-    border-radius: 2px;
-    color: var(--on-highlighter);
-    background: var(--highlighter);
-}
-
-.variable-card.is-changed {
-    border-top: 2px solid var(--write);
-}
-
-.variable-card.is-changed .value-view {
-    color: var(--write);
-}
-
-/* A variable shown for the first time in the trace: the whole row or card is tinted blue. */
-.scalar-row.is-new,
-.variable-card.is-new {
-    background: color-mix(in srgb, var(--ink) 20%, transparent);
-}
-
-/* `7 -> 10` on a single value the last line changed; the old value is the faint one. */
-.change-before {
-    color: var(--pencil-faint);
-}
-
-.change-formula {
-    color: var(--pencil-muted);
-    white-space: pre;
-}
-
-/* `->` is one symbol: `.value-view` breaks anywhere, which split it into `-` and `>` on a narrow row. */
-.change-arrow {
-    display: inline-block;
-    margin: 0 6px;
-    color: var(--write);
-    font-weight: 700;
-    white-space: nowrap;
-    overflow-wrap: normal;
 }
 
 /* The entries of a container the last line changed get a tinted background. */
@@ -2668,10 +2525,9 @@ a.button {
 
 /* Algorithm chooser before Run (mockup approved 2026-11-11): rounded cards with a line icon and
    a one-line hint; the picked card is tinted yellow with a yellow ring, "Other" is outlined only. */
-.right-column.is-choosing > .variables-panel,
 .right-column.is-choosing > .output-panel,
 .right-column.is-choosing > .row-resizer,
-.right-column.is-choosing .algorithm-canvas,
+.right-column.is-choosing .algorithm-body,
 .right-column.is-choosing .algorithm-inputs {
     display: none;
 }
@@ -2805,8 +2661,7 @@ a.button {
 
 .chooser-variables {
     display: flex;
-    flex-wrap: wrap;
-    align-items: center;
+    flex-direction: column;
     gap: 8px;
     margin-top: 6px;
     padding-top: 14px;
@@ -2817,9 +2672,42 @@ a.button {
 
 .chooser-slots {
     display: flex;
-    flex-wrap: wrap;
+    flex-direction: column;
+    gap: 6px;
+}
+
+/* Question, select, what it draws; on a narrow column the hint wraps under them. */
+.chooser-slot {
+    display: grid;
+    grid-template-columns: minmax(150px, 210px) minmax(110px, 170px) 1fr;
     align-items: center;
-    gap: 8px;
+    gap: 6px 12px;
+}
+
+.chooser-slot-question {
+    color: var(--pencil);
+    font-weight: 700;
+}
+
+.chooser-slot-optional {
+    margin-left: 6px;
+    color: var(--pencil-muted);
+    font-size: 12px;
+    font-weight: 400;
+}
+
+.chooser-slot-hint {
+    color: var(--pencil-muted);
+}
+
+@media (max-width: 700px) {
+    .chooser-slot {
+        grid-template-columns: 1fr auto;
+    }
+
+    .chooser-slot-hint {
+        grid-column: 1 / -1;
+    }
 }
 
 .chooser-select {

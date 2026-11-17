@@ -40,7 +40,7 @@
         <ul>
             <li><b>黃色那一行還沒執行</b>，是「接下來要執行的這一行」。</li>
             <li><b>視覺化圖</b>畫的是黃色那一行<b>執行完之後</b>的樣子。例如停在 <code>vis[v] = true</code> 時，v 已經打勾。</li>
-            <li><b>Variables</b> 列出現在的值；這一行會改的值寫成 <code>7 -&gt; 8</code>（現在 → 執行後）。</li>
+            <li><b>變數 ▾</b> 勾選的變數畫在圖的右邊，也是黃色那一行<b>執行完之後</b>的值。</li>
             <li><b>stdout</b> 是到這一步為止程式印出的內容。</li>
         </ul>
 
@@ -50,7 +50,7 @@
             <dt>Test data</dt><dd>stdin 輸入資料。</dd>
             <dt>選擇卡片（Run 之前）</dt><dd>告訴 Debugger 這個程式在做什麼，它就照這個畫，不用自己猜。Array simulation、Sorting 畫一個陣列；Stack、Queue 畫一個容器；Linked List 畫 head 這類節點指標；BFS 畫圖或迷宮，上方加一個 queue；DFS 畫圖或迷宮，上方加一個 stack（用遞迴寫的選「遞迴，沒有 stack」）；Shortest path 畫圖，節點旁標距離陣列的值；Recursion 畫遞迴樹。選 Other 就讓程式自己猜，可能畫得不好。下拉選單寫「（找不到）」代表程式碼裡沒有適合的變數；選的變數在執行中一直沒有資料時，右邊會直接寫出來，不會改用別的畫法。</dd>
             <dt>視覺化圖（上方右側）</dt><dd>照選擇卡片畫；選 Other 時依程式的樣子自動選畫法：長條圖、格子、圖（節點與邊）、Stack、Queue、Linked List、遞迴樹。BFS 時 Queue 會畫在圖或格子上方。Linked List 會把有 <code>next</code> 欄位的物件畫成「值 | •」方塊，上方標出指到它的變數（head、cur），∅ 代表 None（C++ 是 <code>nullptr</code>）。C++ 要用有 <code>Node *next</code> 欄位的 struct，最多沿著 next 讀 50 個節點。用 <b>View</b> 選單可以暫時換畫法或指定要畫的變數，第一項就是你選的演算法（例如 BFS (g + q)）。</dd>
-            <dt>Variables</dt><dd>目前的變數。左邊是單一值，右邊是陣列和容器。已經畫在圖上的變數不會在這裡重複出現；把圖收起來（Hide）就會回到這裡。</dd>
+            <dt>變數 ▾（View 旁邊）</dt><dd>勾選要看的變數，它們會畫在圖的右邊：所有單一值放在同一張卡片，陣列和容器各一張，只寫數值。沒有勾選時右邊不會出現。已經畫在圖上的變數不會出現在清單裡。</dd>
             <dt>stdout</dt><dd>程式輸出。</dd>
             <dt>時間軸（最下方）</dt><dd>拖曳滑桿可以跳到任何一步。<b>|‹</b>、<b>›|</b> 跳到目前迴圈的前後。右邊的速度選單控制自動播放速度。</dd>
             <dt>Hide 與分隔線</dt><dd>每個區塊都能收起來；拖曳區塊之間的分隔線可以調整大小，雙擊分隔線恢復預設。</dd>

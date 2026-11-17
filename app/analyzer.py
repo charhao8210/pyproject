@@ -163,7 +163,8 @@ def analyze_execution(
     loops = loop_jumps(steps, loop_ranges(source, language))
     inputs = input_values(source, language, steps)
     extents = {**_grid_extents(scopes)}
-    profile = replace(profile, reached_rules=_reached_rules(scopes))
+    picked_tables = tuple(name for name in ((plan or {}).get("visited"), (plan or {}).get("distance")) if name)
+    profile = replace(profile, reached_rules=_reached_rules(scopes, picked_tables))
     last_ready: dict[str, dict[str, Any]] = {}
     previous: dict[str, dict[str, Any]] = {}
     # The "infinity" placeholder values seen in each array so far (`_mark_infinite`).
@@ -221,6 +222,14 @@ def analyze_execution(
     if plan and not _choice_drawn(plan, steps):
         for step in steps:
             step["visualization"] = {"renderer": plan["renderer"], "ready": False, "missing": plan["name"], "uses": []}
+    elif plan:
+        # Before the picked variable has data (`g` filled from input), say from which step it
+        # is drawn instead of an empty view that looks like a failure.
+        first = next((step["step"] for step in steps if step["visualization"].get("ready")), None)
+        for step in steps:
+            if step["step"] == first:
+                break
+            step["visualization"] = {**step["visualization"], "waiting": plan["name"], "first_step": first}
     # The profile can name a renderer whose data never shows up (a 1D `dp` for a
     # "DP table"); Auto then falls back to the first view that draws something.
     if not plan and not any(step["visualization"].get("ready") for step in steps):
@@ -457,6 +466,11 @@ def _choice_plan(choice: dict[str, Any], scopes: list[dict[str, Any]], catalog: 
         "variables": [picked[slot] for slot in slots if picked[slot]],
         "companion": None,
         "labels": None,
+        # Graph algorithms: the arrays that tick visited cells and hold distances, and the
+        # queue or stack whose cells get the dashed frontier box; "" draws none of it.
+        "visited": picked.get("visited", ""),
+        "distance": picked.get("distance", ""),
+        "frontier": picked.get("queue") or picked.get("stack") or "",
     }
 
     def values(name: str) -> list[Any]:
@@ -478,11 +492,11 @@ def _choice_plan(choice: dict[str, Any], scopes: list[dict[str, Any]], catalog: 
     name = picked["graph"]
     adjacency = any(_is_adjacency(value, name) for value in values(name))
     renderer = "grid" if not adjacency and any(_is_grid(value) for value in values(name)) else "graph"
-    if algorithm == "bfs" and picked["queue"]:
+    if picked.get("queue"):
         plan["companion"] = ("queue", picked["queue"])
-    elif algorithm == "dfs" and picked["stack"]:
+    elif picked.get("stack"):
         plan["companion"] = ("stack", picked["stack"])
-    elif algorithm == "shortest_path" and picked["distance"]:
+    if picked.get("distance"):
         plan["labels"] = picked["distance"]
     return {**plan, "renderer": renderer, "name": name}
 
@@ -500,8 +514,11 @@ def _chosen_model(
     renderer, name = plan["renderer"], plan["name"]
     if not name:
         return {"renderer": renderer, "ready": False}
+    picks = {key: plan.get(key, "") for key in ("visited", "distance", "frontier")}
     if renderer == "graph":
-        return _graph_visualization(scope, name, profile.pair_vertex, plan["labels"])
+        return _graph_visualization(scope, name, profile.pair_vertex, plan["labels"], picks, dict(profile.reached_rules))
+    if renderer == "grid":
+        return _grid_visualization(scope, step, name, extents, dict(profile.reached_rules), picks)
     if renderer == "recursion_tree":
         if recursion_state is None:
             return {"renderer": renderer, "ready": False}
@@ -1198,7 +1215,10 @@ def _grid_visualization(
     name: str | None = None,
     extents: dict[str, tuple[int, int]] | None = None,
     reached_rules: dict[str, str] | None = None,
+    picks: dict[str, str] | None = None,
 ) -> dict[str, Any]:
+    """`picks` (chosen before Run) names the visited table, the distance table written on
+    the cells and the queue or stack in the frontier; then nothing is guessed by name."""
     if name is None:
         # A character map (the maze, the board) is the grid; tables beside it only mark it.
         grid_name, grid = _character_map(scope)
@@ -1206,7 +1226,10 @@ def _grid_visualization(
             grid_name, grid = _find_grid(scope)
     else:
         value = scope.get(name)
-        grid_name, grid = (name, value) if _is_grid(value) else (None, None)
+        # A picked map half-way through `cin >> a[i][j]` has a short last row; draw it filling
+        # cell by cell, as Auto does, not the last full-row state.
+        being_read = isinstance(value, list) and all(isinstance(row, str) for row in value) and _being_read(value)
+        grid_name, grid = (name, value) if _is_grid(value) or being_read else (None, None)
     if grid is None:
         return {"renderer": "grid", "ready": False}
     rows = _normalize_grid(_used_rows(grid))
@@ -1215,7 +1238,7 @@ def _grid_visualization(
     # A character map (`a`) and a number table (`dp`) are drawn as one grid: the map
     # while the table is still all zero (the input is being read), then the table's
     # numbers with the map's walls kept in place.
-    pair = _map_and_table(scope) if name is None else None
+    pair = _map_and_table(scope) if picks is None else _picked_table(scope, grid_name, grid, picks.get("distance"))
     if pair is not None:
         (map_name, map_rows), (table_name, table_rows) = pair
         walls = _wall_cells(map_rows)
@@ -1263,13 +1286,18 @@ def _grid_visualization(
         return {"renderer": "grid", "ready": False}
     rows = [row[:column_count] for row in rows[:row_count]]
 
-    visited_name, visited = _find_visited(scope, row_count, column_count, reached_rules)
+    if picks is None:
+        visited_name, visited = _find_visited(scope, row_count, column_count, reached_rules)
+    else:
+        visited_name = picks.get("visited") or None
+        visited = _reached_marks(scope.get(visited_name), row_count, column_count, (reached_rules or {}).get(visited_name)) if visited_name else None
+        visited = visited or [[False] * column_count for _ in range(row_count)]
     # A wall is never visited, whatever value a table keeps for it.
     for row, column in walls:
         if row < row_count and column < column_count:
             visited[row][column] = False
     active, active_names, coordinates = _active_cells(scope, row_count, column_count)
-    frontier_name, frontier = _frontier_cells(scope, row_count, column_count)
+    frontier_name, frontier = _frontier_cells(scope, row_count, column_count, None if picks is None else picks.get("frontier", ""))
     queue = scope.get(frontier_name) if frontier_name else None
     return {
         "renderer": "grid",
@@ -1632,6 +1660,8 @@ def _graph_visualization(
     graph_name: str | None = None,
     vertex_position: int | None = None,
     label_name: str | None = None,
+    picks: dict[str, str] | None = None,
+    reached_rules: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     for name, value in _named_values(scope, graph_name, ("graph", "g", "adj", "adjacency")):
         if not _is_adjacency(value, name) or (graph_name is None and name.lower() in NOT_A_GRAPH_NAMES):
@@ -1678,7 +1708,12 @@ def _graph_visualization(
             visited = [str(item) for item in visited_value]
         else:
             visited = []
-        if visited_name is None:
+        if picks is not None:
+            # Chosen before Run: that array (any name), or no ticks at all.
+            visited_name = picks.get("visited") or None
+            visited_value = scope.get(visited_name) if visited_name else []
+            visited = _picked_vertices(visited_value, (reached_rules or {}).get(visited_name))
+        elif visited_name is None:
             visited_name, visited = _reached_vertices(scope, numeric_nodes)
             visited_value = scope.get(visited_name) if visited_name else []
         current_name = next(
@@ -1694,7 +1729,9 @@ def _graph_visualization(
         checking = _checking_edge(scope, edges, current_name)
         if checking is not None and current_name is None:
             current_name, current = checking["from_name"], checking["source"]
-        frontier_name, frontier, frontier_entries = _graph_frontier(scope, node_ids)
+        frontier_name, frontier, frontier_entries = _graph_frontier(
+            scope, node_ids, GRAPH_FRONTIER_NAMES if picks is None else tuple(filter(None, [picks.get("frontier")]))
+        )
         if label_name is not None:
             # Picked before Run (shortest path): that array, even when it also marks visits.
             label_name, labels = _graph_labels(scope, numeric_nodes, {name}, (label_name,))
@@ -1877,13 +1914,17 @@ GRAPH_LABEL_NAMES = (
 )
 
 
-def _graph_frontier(scope: dict[str, Any], node_ids: set[str]) -> tuple[str | None, list[str], list[str] | None]:
+def _graph_frontier(
+    scope: dict[str, Any],
+    node_ids: set[str],
+    names: Iterable[str] = GRAPH_FRONTIER_NAMES,
+) -> tuple[str | None, list[str], list[str] | None]:
     """The BFS queue or DFS stack: a list whose entries are all vertices of the graph.
 
     Dijkstra's priority queue holds (distance, vertex) pairs; the vertex is the second item
     (or the first, when only that one is always a vertex).
     """
-    for name in GRAPH_FRONTIER_NAMES:
+    for name in names:
         key, value = _scope_lookup(scope, name)
         if not isinstance(value, list):
             continue
@@ -1950,18 +1991,63 @@ def _find_visited(
             ]
     for name in REACHED_GRID_NAMES:
         key, value = _scope_lookup(scope, name)
-        rows_of = _normalize_grid(_used_rows(value)) if isinstance(value, list) else []
-        reached = _reached_test([cell for row in rows_of for cell in row], (reached_rules or {}).get(key))
-        if reached is None:
-            continue
-        marks = [
-            [reached(rows_of[row][column]) if row < len(rows_of) and column < len(rows_of[row]) else False
-             for column in range(columns)]
-            for row in range(rows)
-        ]
-        if any(any(row) for row in marks):
+        marks = _reached_marks(value, rows, columns, (reached_rules or {}).get(key), bools=False)
+        if marks and any(any(row) for row in marks):
             return key, marks
     return None, [[False] * columns for _ in range(rows)]
+
+
+def _reached_marks(
+    value: Any,
+    rows: int,
+    columns: int,
+    rule: str | None = None,
+    bools: bool = True,
+) -> list[list[bool]] | None:
+    """Which cells a table marks as reached (`_reached_test`; with `bools`, the True cells of a
+    bool table too)."""
+    rows_of = _normalize_grid(_used_rows(value)) if isinstance(value, list) else []
+    cells = [cell for row in rows_of for cell in row]
+    if bools and cells and all(isinstance(cell, bool) for cell in cells):
+        reached = lambda cell: cell is True  # noqa: E731
+    else:
+        reached = _reached_test(cells, rule)
+    if reached is None:
+        return None
+    return [
+        [reached(rows_of[row][column]) if row < len(rows_of) and column < len(rows_of[row]) else False
+         for column in range(columns)]
+        for row in range(rows)
+    ]
+
+
+def _picked_vertices(value: Any, rule: str | None = None) -> list[str]:
+    """Vertices a picked visited array marks: a flag or distance per vertex (`vis[v]`,
+    `dist[v] = -1` until reached), or a set / list of the vertices themselves."""
+    if not isinstance(value, list) or not value:
+        return []
+    if all(isinstance(item, bool) for item in value):
+        return [str(index) for index, item in enumerate(value) if item]
+    if isinstance(value, _SetItems) or not all(_is_number(item) for item in value):
+        return [str(item) for item in value if _is_index(item) or isinstance(item, str)]
+    reached = _reached_test(value, rule)
+    return [str(index) for index, item in enumerate(value) if reached and reached(item)]
+
+
+def _picked_table(
+    scope: dict[str, Any],
+    map_name: str | None,
+    map_value: Any,
+    table_name: str | None,
+) -> tuple[tuple[str, list[list[Any]]], tuple[str, list[list[Any]]]] | None:
+    """The map and the distance table picked before Run, drawn as one grid like `_map_and_table`."""
+    table = scope.get(table_name) if table_name else None
+    if map_name is None or not _is_grid(table):
+        return None
+    table_rows = _normalize_grid(_used_rows(table))
+    if not all(_is_number(cell) for row in table_rows for cell in row):
+        return None
+    return (map_name, _normalize_grid(_used_rows(map_value))), (table_name, table_rows)
 
 
 # Values a distance table starts with for "not reached yet": `-1`, `INF`, `1e9`, `INT_MAX`.
@@ -1970,7 +2056,7 @@ INF_CONSTANTS = frozenset({
 })
 
 
-def _reached_rules(scopes: list[dict[str, Any]]) -> tuple[tuple[str, str], ...]:
+def _reached_rules(scopes: list[dict[str, Any]], picked: tuple[str, ...] = ()) -> tuple[tuple[str, str], ...]:
     """For each distance table, how it marks "not reached", from every step of the trace.
 
     Once the last `-1` is gone (every cell reached), the table alone would look like a
@@ -1980,12 +2066,13 @@ def _reached_rules(scopes: list[dict[str, Any]]) -> tuple[tuple[str, str], ...]:
     rules: dict[str, str] = {}
     measured: set[int] = set()
     for scope in scopes:
-        for name in REACHED_GRID_NAMES:
+        for name in (*REACHED_GRID_NAMES, *picked):
             key, value = _scope_lookup(scope, name)
             if not isinstance(value, list) or id(value) in measured:
                 continue
             measured.add(id(value))
-            cells = [cell for row in value if isinstance(row, list) for cell in row if _is_number(cell)]
+            # A table per cell, or (picked for a graph) one entry per vertex.
+            cells = [cell for row in value for cell in (row if isinstance(row, list) else [row]) if _is_number(cell)]
             if any(cell < 0 for cell in cells):
                 rules[key] = "negative"
             elif rules.get(key) != "negative" and any(_is_infinity(cell) for cell in cells):
@@ -2080,6 +2167,7 @@ def _frontier_cells(
     scope: dict[str, Any],
     rows: int,
     columns: int,
+    picked: str | None = None,
 ) -> tuple[str | None, list[dict[str, int]]]:
     def cell_list(value: Any) -> bool:
         return isinstance(value, list) and all(
@@ -2087,13 +2175,17 @@ def _frontier_cells(
             for item in value
         )
 
-    frontier_name = next(
-        (name for name in ("stack", "queue", "frontier", "q", "que", "st") if cell_list(scope.get(name))),
-        None,
-    ) or next(
-        (name for name, value in scope.items() if value and cell_list(value)),
-        None,
-    )
+    if picked is not None:
+        # Chosen before Run: that queue or stack only (a direction table `dir` is not one).
+        frontier_name = picked if picked and cell_list(scope.get(picked)) else None
+    else:
+        frontier_name = next(
+            (name for name in ("stack", "queue", "frontier", "q", "que", "st") if cell_list(scope.get(name))),
+            None,
+        ) or next(
+            (name for name, value in scope.items() if value and cell_list(value)),
+            None,
+        )
     frontier = scope[frontier_name] if frontier_name else []
     cells = []
     for item in frontier[:MAX_VISUAL_ITEMS]:

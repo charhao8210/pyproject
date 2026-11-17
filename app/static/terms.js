@@ -26,14 +26,10 @@
         {group: "視覺化圖的標記", term: "On the call path", tip: "還沒結束、正在等子呼叫回傳的呼叫。"},
         {group: "視覺化圖的標記", term: "Waiting on a call", tip: "還沒結束、正在等子呼叫回傳的呼叫。"},
         {group: "視覺化圖的標記", term: "Returned", tip: "已經結束的呼叫；箭頭後面是它回傳的值。"},
-        // Variables panel
-        {group: "Variables 區", term: "Used on this line", tip: "黃色名字：黃色那一行（還沒執行）會用到的變數。"},
-        {group: "Variables 區", term: "Changed by the last line", tip: "橘色：上一行執行後，值改變了的變數。"},
-        {group: "Variables 區", term: "First appearance", tip: "整列淺藍色：這個變數第一次出現（剛被宣告）。"},
-        {group: "Variables 區", term: "now -> next", tip: "例如 7 -> mid+1 = 7+1 = 8：左邊是現在的值，右邊是黃色那一行執行完之後的值，中間是它怎麼算出來的。"},
+        // The variables beside the view
         {group: "Variables 區", term: "same list as", tip: "↪ 後面是這個變數指向的物件：same list as a 代表和 a 是同一個 list（例如 b = a）；matrix[1] 代表它就是 matrix 的第 1 列（例如 row = matrix[1]）。改其中一個，另一個也會跟著變。滑鼠停在上面時，會把那個位置在圖上和 Variables 裡框起來。"},
         {group: "Variables 區", term: "integer", tip: "斜體的 integer / floating / text：找不到這個變數的宣告，所以只顯示值的種類，不猜它是 int 還是 long long。"},
-        {group: "Variables 區", term: "Function", tip: "Variables 標題旁邊的名字：現在所在的函式。lambda 會顯示存放它的變數名稱（例如 dfs）。"},
+        {group: "Variables 區", term: "Function", tip: "「單一值」卡片右上角的名字：現在所在的函式。lambda 會顯示存放它的變數名稱（例如 dfs）。"},
         // Algorithm chooser before Run
         {group: "選擇演算法（Run 之前）", term: "Array simulation", tip: "陣列模擬：把選的陣列畫成長條圖，看它每一格怎麼變。"},
         {group: "選擇演算法（Run 之前）", term: "Sorting", tip: "排序：把選的陣列畫成長條圖，看比較與交換。"},

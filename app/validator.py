@@ -6,6 +6,23 @@ from dataclasses import dataclass
 
 MAX_SOURCE_LENGTH = 50_000
 
+# Modules a program may import and the members it gets (tracer._safe_builtins hands out only
+# these, so a module's own imports and helpers stay out of reach).
+MODULE_MEMBERS: dict[str, frozenset[str]] = {
+    "sys": frozenset({"stdin", "exit", "setrecursionlimit"}),
+    "heapq": frozenset({
+        "heapify", "heappop", "heappush", "heappushpop", "heapreplace", "merge", "nlargest", "nsmallest",
+    }),
+    "bisect": frozenset({"bisect", "bisect_left", "bisect_right", "insort", "insort_left", "insort_right"}),
+    "collections": frozenset({"deque", "defaultdict", "Counter"}),
+    "math": frozenset({
+        "acos", "asin", "atan", "atan2", "ceil", "comb", "cos", "dist", "e", "exp", "factorial",
+        "floor", "fsum", "gcd", "hypot", "inf", "isqrt", "lcm", "log", "log10", "log2", "perm",
+        "pi", "pow", "prod", "sin", "sqrt", "tan", "trunc",
+    }),
+}
+SAFE_IMPORT_MESSAGE = "Only these modules can be imported: sys, collections (deque, defaultdict, Counter), heapq, bisect, math."
+
 
 @dataclass(frozen=True)
 class ValidationIssue:
@@ -45,15 +62,13 @@ class _SafetyVisitor(ast.NodeVisitor):
         )
 
     def visit_Import(self, node: ast.Import) -> None:
-        if any(alias.name != "sys" for alias in node.names):
-            self._reject(node, "Only the sys module is available for standard input.")
+        if any(alias.name not in MODULE_MEMBERS for alias in node.names):
+            self._reject(node, SAFE_IMPORT_MESSAGE)
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
-        allowed = node.module == "sys" and all(
-            alias.name == "stdin" for alias in node.names
-        )
-        if not allowed:
-            self._reject(node, "Only 'from sys import stdin' is allowed.")
+        members = MODULE_MEMBERS.get(node.module or "", frozenset())
+        if node.level or not all(alias.name in members for alias in node.names):
+            self._reject(node, SAFE_IMPORT_MESSAGE)
 
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
         self._reject(node, "Async code is not supported in the MVP.")

@@ -37,4 +37,6 @@ class DebugResponse(BaseModel):
     # C++ loop lines that stopped being traced after `loop_stop_limit` stops, with the step
     # of their last stop (`cpp_runner.MAX_LOOP_LINE_STOPS`).
     capped: list[dict[str, int]] = Field(default_factory=list)
+    # Python: how many steps the program ran when that is more than the steps recorded.
+    total_steps: int | None = None
     loop_stop_limit: int | None = None

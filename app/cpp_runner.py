@@ -355,31 +355,46 @@ def _discover(
     if not candidates:
         return _Discovery()
     loop_addresses = loop_addresses or {}
-    commands = [
+    setup = [
         "set pagination off",
         "set confirm off",
         "set breakpoint pending off",
         "set print thread-events off",
         "set width 0",
     ]
+    # One script per line: a failing command aborts the rest of its script, and newer GDBs
+    # refuse a line without code (`int g = 0;` → "No compiled code for line 3") instead of
+    # sliding to the next function, which used to stop every later breakpoint.
+    # shortcut: one `-x bN` per line keeps the command line under Windows' 32K limit only up
+    # to about 3000 code lines; batch the scripts if longer sources must work.
+    scripts: list[str] = [argument for command in setup for argument in ("-ex", command)]
     for line in candidates:
-        commands.extend(
-            [
-                f"break {CPP_FILENAME}:{line}",
-                # A multi-location breakpoint is reported under the requested line even when
-                # GDB moved it to a later one (a global declaration slides into the next
-                # function); the listing names the real line.
-                "info breakpoints $bpnum",
-                f"echo {SCOPE_MARKER}{line}\\n",
-                f"info scope {CPP_FILENAME}:{line}",
-                f"echo {SCOPE_END_MARKER}\\n",
-            ]
+        (workdir / f"b{line}").write_text(
+            "\n".join(
+                [
+                    f"break {CPP_FILENAME}:{line}",
+                    # A multi-location breakpoint is reported under the requested line even when
+                    # GDB moved it to a later one (a global declaration slides into the next
+                    # function); the listing names the real line.
+                    "info breakpoints $bpnum",
+                    f"echo {SCOPE_MARKER}{line}\\n",
+                    f"info scope {CPP_FILENAME}:{line}",
+                    f"echo {SCOPE_END_MARKER}\\n",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
         )
-    for line, addresses in loop_addresses.items():
-        for address in addresses:
-            commands.extend([f"echo {SYMBOL_MARKER}{line} {address:#x}\\n", f"info symbol {address:#x}"])
-    script_path = workdir / "discover.gdb"
-    script_path.write_text("\n".join(commands) + "\n", encoding="utf-8")
+        scripts.extend(["-x", f"b{line}"])
+    symbols = [
+        command
+        for line, addresses in loop_addresses.items()
+        for address in addresses
+        for command in (f"echo {SYMBOL_MARKER}{line} {address:#x}\\n", f"info symbol {address:#x}")
+    ]
+    if symbols:
+        (workdir / "symbols.gdb").write_text("\n".join(symbols) + "\n", encoding="utf-8")
+        scripts.extend(["-x", "symbols.gdb"])
     # Each -ex command is isolated: an unknown name only fails its own whatis.
     type_queries: list[str] = []
     for candidate in model.globals:
@@ -391,8 +406,7 @@ def _discover(
             debugger,
             "-q",
             "-batch",
-            "-x",
-            script_path.name,
+            *scripts,
             *type_queries,
             executable_path.name,
         ],
@@ -1080,7 +1094,8 @@ def _native_array_commands(name: str, spec: ValueSpec) -> list[str]:
         f"set $pv_len = $pv_total > {MAX_VALUE_ITEMS} ? {MAX_VALUE_ITEMS} : $pv_total",
         f"output *&{name}[0]@$pv_len",
     ]
-    if spec.element != "text":
+    # Strings hold pointers, so their bytes say nothing about an unwritten tail.
+    if spec.element not in {"text", "string"}:
         commands.extend(
             [
                 f"if $pv_total > {MAX_VALUE_ITEMS}",
