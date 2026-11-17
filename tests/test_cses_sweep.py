@@ -298,10 +298,7 @@ def test_each_line_carries_the_values_and_cells_it_will_change() -> None:
 
     # Each effect belongs to the step showing the line that makes it.
     assert (usage[4]["next"]["x"]["type"], usage[4]["next"]["x"]["value"]) == ("int", 10)
-    assert usage[5]["cells"]["a"] == {"items": [1], "cells": []}
-    assert usage[6]["cells"]["g"] == {"items": [1], "cells": [[1, 0]]}
-    assert usage[8]["cells"]["s"]["items"] == [1] and "s" not in usage[8]["next"]
-    assert usage[5]["next"] == {} and usage[9]["cells"] == {}
+    assert "s" not in usage[8]["next"] and usage[5]["next"] == {}
 
 
 @requires_cpp
@@ -351,31 +348,14 @@ def test_only_a_variables_first_appearance_is_new() -> None:
     assert "mid" in mid_line["usage"]["new"] and mid_line["usage"]["appearing"]["mid"]["value"]["value"] == 0
 
 
-def test_assignment_formulas_name_where_a_value_comes_from() -> None:
-    from app.usage import assignment_formula
-
-    scope = {"ma": 7, "l": 7, "r": 10**18, "a": [2, 4, 7], "i": 2, "sum": 6, "g": [[0, 0], [0, 5]]}
-
-    assert assignment_formula("int l=ma,r=1e18;", "l", scope, "cpp") == {"expression": "ma", "substituted": "7"}
-    assert assignment_formula("int mid=(l+r)/2;", "mid", scope, "cpp")["expression"] == "(l+r)/2"
-    assert assignment_formula("sum+=a[i];", "sum", scope, "cpp") == {"expression": "sum+a[i]", "substituted": "6+7"}
-    assert assignment_formula("flag++;", "flag", scope, "cpp") == {"expression": "flag+1", "substituted": "flag+1"}
-    assert assignment_formula("x = g[1][i-1] + a[a[0]]", "x", scope, "python")["substituted"] == "5 + 7"
-    # A loop header assigns i twice, and a comparison assigns nothing.
-    assert assignment_formula("for(int i=0;i<n;i++){", "i", scope, "cpp") is None
-    assert assignment_formula("if(l<=r)", "l", scope, "cpp") is None
-
-
-def test_a_declared_value_carries_its_formula_on_the_line_that_declares_it() -> None:
+def test_a_declared_value_is_listed_on_the_line_that_declares_it() -> None:
     result = run_debugger("ma = 7\nl = ma\nl = l + 2\ndone = 0\n")
     by_line = {}
     for step in result["steps"]:
         by_line.setdefault(step["line"], step["usage"])
 
     assert by_line[2]["appearing"]["l"]["value"]["value"] == 7
-    assert by_line[2]["formula"]["l"] == {"expression": "ma", "substituted": "7"}
     assert by_line[3]["next"]["l"]["value"] == 9
-    assert by_line[3]["formula"]["l"] == {"expression": "l + 2", "substituted": "7 + 2"}
 
 
 
@@ -410,7 +390,6 @@ def test_queue_pushes_are_new_and_pops_do_not_mark_every_entry_written() -> None
     assert read["usage"]["appearing"]["n"]["value"]["value"] == 4 and "n" not in read["usage"]["next"]
     assert "n" in read["usage"]["new"]
     push =next(step for step in steps if step["line"] == 13)
-    assert push["usage"]["cells"]["a"]["appended"] == [{"type": "int", "value": 1}]
     # The pushing line's own step draws the state after it: the new entry, blue (`added`).
     assert push["visualization"]["renderer"] == "queue" and push["visualization"]["values"] == ["1", "2", "3", "4", "1"]
     assert push["visualization"]["added"] == [4] and push["visualization"]["written"] == []
@@ -510,25 +489,17 @@ def test_a_one_line_loop_stops_at_every_test_of_its_condition() -> None:
     )
     steps = run_debugger(code, language="cpp")["steps"]
     trail = [
-        (step["function"], step["usage"]["next"].get("t", {}).get("value"), step["usage"]["formula"].get("t", {}).get("substituted"))
+        (step["function"], step["usage"]["next"].get("t", {}).get("value"))
         for step in steps
         if step["line"] in (3, 7)
     ]
     assert trail == [
-        ("main", 1, "2-1"), ("main", None, None), ("solve", None, None),
-        ("main", 0, "1-1"), ("main", None, None), ("solve", None, None),
-        ("main", -1, "0-1"),
+        ("main", 1), ("main", None), ("solve", None),
+        ("main", 0), ("main", None), ("solve", None),
+        ("main", -1),
     ]
     # The for loop's own `i` is shown at its extra stops, and `i++` is a step of its own.
     values = [step["locals"]["i"]["value"] for step in steps if step["line"] == 8 and "i" in step["locals"]]
     assert values[:2] == [1, 1] and 2 in values and values[-1] == 3
     loop = next(step["loop"] for step in steps if step["line"] == 7)
     assert steps[loop["after"]]["line"] == 8
-
-
-def test_a_formula_that_disagrees_with_the_result_is_dropped() -> None:
-    from app.usage import _formula_disagrees
-
-    assert _formula_disagrees("1-1", -1)
-    assert not _formula_disagrees("1-1", 0)
-    assert not _formula_disagrees("7/2", 3)

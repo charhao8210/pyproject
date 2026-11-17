@@ -3,9 +3,7 @@ last step in the same frame (the effect of the line that just ran)."""
 
 from __future__ import annotations
 
-import ast
 import re
-from functools import lru_cache
 from typing import Any
 
 
@@ -75,7 +73,6 @@ def variable_usage(
             effect = usage[earlier]
             serialized = {**(step.get("globals") or {}), **(step.get("locals") or {})}
             effect_line = steps[earlier].get("line")
-            effect_text = lines[effect_line - 1] if isinstance(effect_line, int) and 1 <= effect_line <= len(lines) else ""
             for name in changed:
                 new = serialized.get(name)
                 single = isinstance(new, dict) and new.get("type") in SINGLE_VALUE_TYPES
@@ -103,22 +100,10 @@ def variable_usage(
                 else:
                     # The whole container after the line, drawn beside the view (Variables).
                     effect["after"][name] = new
-                    marks = _changed_cells(before[name], scope[name])
-                    if marks:
-                        if "appended" in marks:
-                            # Entries the line adds, serialized, drawn after the current ones.
-                            items = new.get("items") or [] if isinstance(new, dict) else []
-                            marks["appended"] = [items[position] for position in marks["appended"] if position < len(items)]
-                        effect["cells"][name] = marks
-                if single:
-                    formula = assignment_formula(effect_text, name, scopes[earlier], language)
-                    if formula and not _formula_disagrees(formula["substituted"], scope.get(name)):
-                        effect["formula"][name] = formula
         frame_scopes[key] = scope
         frame_steps[key] = index
         current = {
-            "line": on_line, "changed": changed, "new": [], "appearing": {}, "next": {}, "cells": {}, "formula": {},
-            "after": {},
+            "line": on_line, "changed": changed, "new": [], "appearing": {}, "next": {}, "after": {},
         }
         usage.append(current)
         # A variable's first appearance in the whole trace (a loop re-declaring it, or a later
@@ -148,126 +133,7 @@ def variable_usage(
     return usage
 
 
-# How a line computes a value: `l = ma` → `{"expression": "ma", "substituted": "7"}`, drawn as
-# `ma = 7`. Only a line that assigns the name exactly once, with `=`, `op=`, `++` or `--`.
-_ASSIGN_OPERATORS = r"(?:\*\*|//|<<|>>|[-+*/%&|^])"
-_NOT_VALUES = frozenset({
-    "true", "false", "True", "False", "None", "nullptr", "and", "or", "not", "sizeof",
-    "int", "long", "double", "float", "char", "bool", "unsigned", "short", "auto", "const",
-})
-
-
-def assignment_formula(line: str, name: str, scope: dict[str, Any], language: str) -> dict[str, str] | None:
-    code = re.sub(r"//[^\n]*|/\*.*?\*/", " ", line) if language == "cpp" else line.split("#", 1)[0]
-    target = rf"(?<![\w.\]])\b{re.escape(name)}\b"
-    assignments = list(re.finditer(rf"{target}\s*({_ASSIGN_OPERATORS})?\s*=(?!=)", code))
-    steps = list(re.finditer(rf"{target}\s*(\+\+|--)|(\+\+|--)\s*{re.escape(name)}\b", code))
-    if len(assignments) + len(steps) != 1:
-        return None
-    if steps:
-        operator = (steps[0].group(1) or steps[0].group(2))[0]
-        expression = f"{name}{operator}1"
-    else:
-        match = assignments[0]
-        right = _right_hand_side(code, match.end())
-        if not right:
-            return None
-        operator = match.group(1)
-        expression = f"{name}{operator}{right}" if operator else right
-    substituted = _substitute(expression, scope, language)
-    return {"expression": expression, "substituted": substituted}
-
-
-def _formula_disagrees(substituted: str, result: Any) -> bool:
-    """True when the line ran its update more than once before the frame's next stop.
-
-    `while(t--) solve();` decrements t at every test, so t goes 1 -> -1 while the
-    formula would read `1-1 = -1`; such a formula is dropped rather than drawn wrong.
-    """
-    if isinstance(result, bool) or not isinstance(result, int) or "/" in substituted or "%" in substituted:
-        return False
-    value = _integer(substituted)
-    return value is not None and value != result
-
-
-def _right_hand_side(code: str, start: int) -> str:
-    """The expression after `=`, up to the `;`, `,` or `)` that ends it."""
-    depth = 0
-    for position in range(start, len(code)):
-        character = code[position]
-        if character in "([{":
-            depth += 1
-        elif character in ")]}":
-            if depth == 0:
-                return code[start:position].strip()
-            depth -= 1
-        elif character in ";," and depth == 0:
-            return code[start:position].strip()
-    return code[start:].strip()
-
-
-def _substitute(expression: str, scope: dict[str, Any], language: str) -> str:
-    """Replace variables (and constant-index entries such as `a[2]`) with their values."""
-    def scalar(match: re.Match[str]) -> str:
-        name = match.group(0)
-        value = scope.get(name, _MISSING)
-        if name in _NOT_VALUES or value is _MISSING or not _is_single(value):
-            return name
-        return _display(value, language)
-
-    text = re.sub(r"(?<![\w.'\"])[A-Za-z_]\w*\b(?!\s*[(\[])", scalar, expression)
-    # Entries: `a[0]`, then `g[1][2]`, then `a[b[0]]` once the inner one is a number.
-    for _ in range(4):
-        replaced = re.sub(r"(?<![\w.])([A-Za-z_]\w*)((?:\[[^\[\]]*\])+)", lambda match: _entry(match, scope, language), text)
-        if replaced == text:
-            break
-        text = replaced
-    return text
-
-
-def _entry(match: re.Match[str], scope: dict[str, Any], language: str) -> str:
-    value = scope.get(match.group(1))
-    for index_text in re.findall(r"\[([^\[\]]*)\]", match.group(2)):
-        index = _integer(index_text)
-        if index is None or not isinstance(value, (list, str)) or not -len(value) <= index < len(value):
-            return match.group(0)
-        value = value[index]
-    return _display(value, language) if _is_single(value) else match.group(0)
-
-
-# The same index texts (`3 - 1`) come back at every step of a loop.
-@lru_cache(maxsize=8192)
-def _integer(text: str) -> int | None:
-    """Evaluate a small integer expression such as `3-1` (a substituted `i-1`)."""
-    if not re.fullmatch(r"[\d\s+\-*/%()]+", text) or "**" in text:
-        return None
-    try:
-        tree = ast.parse(text.replace("/", "//"), mode="eval")
-    except SyntaxError:
-        return None
-    if not all(isinstance(node, (ast.Expression, ast.BinOp, ast.UnaryOp, ast.Constant, ast.operator, ast.unaryop)) for node in ast.walk(tree)):
-        return None
-    try:
-        result = eval(compile(tree, "<index>", "eval"), {"__builtins__": {}})  # noqa: S307 - digits and operators only
-    except ArithmeticError:
-        return None
-    return result if isinstance(result, int) else None
-
-
-def _is_single(value: Any) -> bool:
-    return isinstance(value, (int, float, str, bool)) or value is None
-
-
-def _display(value: Any, language: str) -> str:
-    if isinstance(value, bool):
-        return ("true" if value else "false") if language == "cpp" else str(value)
-    if isinstance(value, str):
-        return repr(value) if language != "cpp" else f'"{value}"'
-    return str(value)
-
-
 SINGLE_VALUE_TYPES = frozenset({"int", "float", "bool", "none", "str", "reference"})
-_MISSING = object()
 
 
 def _creates(language: str, names_on_line: set[str], name: str, uninitialised: frozenset[str] = frozenset()) -> bool:
@@ -321,48 +187,3 @@ def front_removed(old: list[Any], new: list[Any]) -> int:
         if new[: len(kept)] == kept:
             return shift
     return 0
-
-
-def _changed_cells(old: Any, new: Any) -> dict[str, list[Any]] | None:
-    """Positions inside a container whose value differs from the previous step's.
-
-    `appended` holds positions in the new value of entries added at the end (a push), which
-    the current value does not have yet.
-    """
-    items: list[Any] = []
-    cells: list[list[int]] = []
-    appended: list[int] = []
-    if isinstance(new, dict):
-        before = old if isinstance(old, dict) else {}
-        items = [position for position, (key, value) in enumerate(new.items()) if key not in before or before[key] != value]
-    elif isinstance(new, list):
-        before_items = old if isinstance(old, list) else []
-        removed = front_removed(before_items, new)
-        if getattr(new, "unordered", False):
-            # Set members have no fixed position: mark the ones that were not there before.
-            items = [position for position, value in enumerate(new) if value not in before_items]
-        elif removed:
-            # The entries about to leave the front; anything after the kept ones is pushed.
-            items = list(range(removed))
-            appended = list(range(len(before_items) - removed, len(new)))
-        else:
-            appended = list(range(len(before_items), len(new)))
-            for index, value in enumerate(new):
-                previous = before_items[index] if index < len(before_items) else _MISSING
-                if previous == value:
-                    continue
-                items.append(index)
-                # A row of a table (or a character row) also names its changed columns.
-                if isinstance(value, (list, str)):
-                    row = previous if isinstance(previous, (list, str)) else ()
-                    cells.extend(
-                        [index, column]
-                        for column, item in enumerate(value)
-                        if column >= len(row) or row[column] != item
-                    )
-    if not items and not cells and not appended:
-        return None
-    marks: dict[str, list[Any]] = {"items": items, "cells": cells}
-    if appended:
-        marks["appended"] = appended
-    return marks

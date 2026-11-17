@@ -1084,19 +1084,6 @@ h2 {
     font-weight: 700;
 }
 
-/* The entries of a container the last line changed get a tinted background. */
-.array-cell.is-changed-cell,
-.dict-row.is-changed-cell,
-.table-cell.is-changed-cell {
-    background: color-mix(in srgb, var(--write) 24%, transparent);
-}
-
-/* An entry the highlighted line is about to push: drawn after the real ones, light blue. */
-.array-cell.is-new-cell {
-    background: color-mix(in srgb, var(--ink) 22%, transparent);
-    outline: 1.5px dashed var(--ink);
-    outline-offset: -1.5px;
-}
 
 .changed-tag {
     margin-right: 6px;

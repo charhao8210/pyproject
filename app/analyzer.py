@@ -12,7 +12,7 @@ from .loops import loop_jumps, loop_ranges
 from .recursion import build_recursion_tree
 from .serializer import MAX_ITEMS
 from .inputs import input_values
-from .usage import _integer, _substitute, front_removed, variable_usage
+from .usage import front_removed, variable_usage
 
 
 MAX_VISUAL_ROWS = 30

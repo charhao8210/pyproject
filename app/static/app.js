@@ -1448,12 +1448,8 @@ function variableEntries(locals, globals, hidden) {
     ].filter(([name, value]) => !hidden.has(name) && !isNoise(name, value));
 }
 
-// `changes` (`step.usage.cells[name]`) marks the entries the highlighted line will change: `items` are
-// list or dict positions, `cells` are [row, column] of a table.
-function renderValue(value, depth, changes = null) {
+function renderValue(value, depth) {
     if (!value) return textSpan("—", "primitive none");
-    const changedItems = new Set(changes?.items || []);
-    const changedTableCells = new Set((changes?.cells || []).map(([row, column]) => `${row}:${column}`));
     if (value.type === "reference") {
         const reference = textSpan(referenceText(value.object_id), "reference-value");
         reference.dataset.term = "same list as";
@@ -1475,7 +1471,7 @@ function renderValue(value, depth, changes = null) {
     }
     if (value.type === "none") return textSpan("None", "primitive none");
 
-    if (depth === 0 && isTableValue(value)) return renderTableValue(value, changedTableCells);
+    if (depth === 0 && isTableValue(value)) return renderTableValue(value);
     if (["list", "tuple", "set", "frozenset"].includes(value.type)) {
         // A pair inside a list reads best as `(1, 2)`, not as a nested row of cells.
         const flatTuple = value.type === "tuple" && (value.items || []).every(isScalarValue);
@@ -1489,7 +1485,6 @@ function renderValue(value, depth, changes = null) {
             const cell = document.createElement("div");
             cell.className = "array-cell";
             cell.dataset.index = String(index);
-            if (changedItems.has(index)) cell.classList.add("is-changed-cell");
             const indexNode = document.createElement("div");
             indexNode.className = "array-index";
             indexNode.textContent = value.type === "list" || value.type === "tuple" ? index : "item";
@@ -1499,21 +1494,6 @@ function renderValue(value, depth, changes = null) {
             cell.append(indexNode, itemNode);
             array.append(cell);
         });
-        // Entries the highlighted line is about to push, after the current ones, in blue.
-        if (!value.fill && !value.truncated) {
-            (changes?.appended || []).forEach((item, offset) => {
-                const cell = document.createElement("div");
-                cell.className = "array-cell is-new-cell";
-                const indexNode = document.createElement("div");
-                indexNode.className = "array-index";
-                indexNode.textContent = value.type === "list" || value.type === "tuple" ? items.length + offset : "item";
-                const itemNode = document.createElement("div");
-                itemNode.className = "array-item";
-                itemNode.append(renderValue(item, depth + 1));
-                cell.append(indexNode, itemNode);
-                array.append(cell);
-            });
-        }
         if (array.childElementCount) wrapper.append(array);
         else if (!value.fill && !value.truncated) wrapper.append(textSpan("empty", "fill-note"));
         if (value.fill) {
@@ -1531,7 +1511,6 @@ function renderValue(value, depth, changes = null) {
         (value.entries || []).forEach((entry, position) => {
             const row = document.createElement("div");
             row.className = "dict-row";
-            if (changedItems.has(position)) row.classList.add("is-changed-cell");
             const key = document.createElement("div");
             key.className = "dict-key";
             // An object's fields read as plain names (`value`), a dict's keys as values (`"a"`).
@@ -1573,7 +1552,7 @@ function isBlankCell(item) {
     return [0, "", "\0", false, null, undefined].includes(item?.value) && item?.type !== "reference";
 }
 
-function renderTableValue(value, changedCells = new Set()) {
+function renderTableValue(value) {
     const rows = value.items.map((row) => (row.type === "str"
         ? [...row.value].map((character) => ({type: "str", value: character}))
         : row.items || []));
@@ -1608,7 +1587,6 @@ function renderTableValue(value, changedCells = new Set()) {
             const text = !item || item.value === "\0" ? "" : compactValue(item);
             const cell = textSpan(text, "table-cell");
             cell.dataset.row = String(row);
-            if (changedCells.has(`${row}:${column}`)) cell.classList.add("is-changed-cell");
             table.append(cell);
         }
     }
