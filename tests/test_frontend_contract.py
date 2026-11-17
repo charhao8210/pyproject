@@ -328,3 +328,12 @@ def test_chooser_slots_are_plain_questions_with_an_opt_out() -> None:
     assert 'new Option("不用", "")' in script and '"可不選"' in script
     # Optional slots are pre-filled only from the backend's likely names.
     assert "state.likely[slot]" in script
+
+
+def test_code_in_the_other_language_switches_the_language_with_an_undo() -> None:
+    script = Path("app/static/app.js").read_text(encoding="utf-8")
+    template = Path("app/templates/index.html").read_text(encoding="utf-8")
+    assert 'id="language-note"' in template and 'id="language-undo-button"' in template
+    for name in ("function detectLanguage", "function matchLanguageToCode", "function undoLanguageSwitch", "function setLanguage"):
+        assert name in script
+    assert "已幫你把語言切過去" in script and "改回 ${LANGUAGE_NAMES" in script

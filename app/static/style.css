@@ -649,6 +649,38 @@ h2 {
     position: relative;
 }
 
+/* Shown after the language was switched to match pasted code, with a way back. */
+.language-note {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 14px;
+    border-bottom: 1px solid var(--rule);
+    color: var(--pencil);
+    background: color-mix(in srgb, var(--highlighter) 14%, var(--sheet));
+    font-size: 13px;
+}
+
+.language-note[hidden] {
+    display: none;
+}
+
+.language-note-text {
+    margin-right: auto;
+}
+
+.language-note-close {
+    border: 0;
+    color: var(--pencil-muted);
+    background: none;
+    cursor: pointer;
+}
+
+#language-select.is-flash {
+    outline: 2px solid var(--highlighter);
+    outline-offset: 2px;
+}
+
 #code-editor,
 .editor-highlight {
     position: absolute;

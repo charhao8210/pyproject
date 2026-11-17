@@ -63,6 +63,12 @@ const state = {
     candidates: {},
     likely: {},
     candidatesTimer: null,
+    // Language auto-switch: the code before a paste, the debounce timer, the last switch (for
+    // 改回) and whether 改回 was pressed for this code (no switching again until a new paste).
+    beforePaste: null,
+    languageTimer: null,
+    languageSwitch: null,
+    languageLock: false,
     running: false,
     // The side column lists only `pinned` names (checked in 變數 ▾, kept on every step); `all` turns
     // the filter off. Reset by each run.
@@ -153,6 +159,7 @@ const CHOICE_SLOTS = {
     recursion: [],
     other: [],
 };
+const LANGUAGE_NAMES = {python: "Python", cpp: "C++"};
 const CHOICE_LABELS = Object.fromEntries(ALGORITHM_CHOICES.flatMap((group) => group.items).map((item) => [item.id, item.label]));
 
 const STORAGE_PREFIX = "code-visual-debugger";
@@ -169,6 +176,10 @@ const elements = {
     runButton: document.querySelector("#run-button"),
     editButton: document.querySelector("#edit-button"),
     languageSelect: document.querySelector("#language-select"),
+    languageNote: document.querySelector("#language-note"),
+    languageNoteText: document.querySelector("#language-note-text"),
+    languageUndoButton: document.querySelector("#language-undo-button"),
+    languageNoteClose: document.querySelector("#language-note-close"),
     editorWrap: document.querySelector("#editor-wrap"),
     editor: document.querySelector("#code-editor"),
     editorHighlight: document.querySelector("#editor-highlight"),
@@ -221,6 +232,8 @@ elements.runButton.addEventListener("click", runCode);
 elements.chooserRunButton.addEventListener("click", runCode);
 elements.editButton.addEventListener("click", showEditor);
 elements.languageSelect.addEventListener("change", changeLanguage);
+elements.languageUndoButton.addEventListener("click", undoLanguageSwitch);
+elements.languageNoteClose.addEventListener("click", () => { elements.languageNote.hidden = true; });
 elements.themeButton.addEventListener("click", () => setTheme(currentTheme() === "dark" ? "light" : "dark"));
 elements.viewSelect.addEventListener("change", (event) => chooseView(event.target.value, null));
 elements.viewVariableSelect.addEventListener("change", (event) => chooseView(state.view.renderer, event.target.value));
@@ -266,12 +279,26 @@ elements.editor.addEventListener("keydown", (event) => {
     elements.editor.setRangeText("    ", start, end, "end");
     renderEditorHighlight();
 });
+// The code before a paste: the draft the language keeps if the paste switches the language.
+elements.editor.addEventListener("paste", () => {
+    state.beforePaste = elements.editor.value;
+    state.languageLock = false;
+});
 elements.editor.addEventListener("input", () => {
     // Line numbers in an old error no longer match once the code is edited.
     if (state.editorErrors?.length) state.editorErrors = [];
     renderEditorHighlight();
     saveDrafts();
     scheduleCandidates();
+    clearTimeout(state.languageTimer);
+    if (state.beforePaste !== null) {
+        const before = state.beforePaste;
+        state.beforePaste = null;
+        matchLanguageToCode(before);
+    } else {
+        elements.languageNote.hidden = true;
+        state.languageTimer = setTimeout(() => matchLanguageToCode(), 800);
+    }
 });
 // The caret's line number is bold in the gutter, so follow every caret move, not only edits.
 document.addEventListener("selectionchange", () => {
@@ -385,10 +412,50 @@ function restoreDrafts() {
 }
 
 function changeLanguage(event) {
-    const nextLanguage = event.target.value;
+    elements.languageNote.hidden = true;
+    state.languageLock = false;
+    setLanguage(event.target.value);
+}
+
+// Clear signs of one language; plain snippets (a lone function) say nothing.
+function detectLanguage(code) {
+    if (/#\s*include\b|\bint\s+main\s*\(|\bc(?:out|in)\s*(?:<<|>>)|\busing\s+namespace\b/.test(code)) return "cpp";
+    if (/^\s*(?:def|import|from)\s|\b(?:print|input)\s*\(/m.test(code)) return "python";
+    return null;
+}
+
+// Code pasted (or typed) under the wrong language moves to the right one, with the code
+// (the user's choice, mockup lang-switch.png, 2026-11-17); the note offers the way back.
+// `fromDraft` is what the old language keeps: its code before the paste.
+function matchLanguageToCode(fromDraft = elements.editor.value) {
+    const target = detectLanguage(elements.editor.value);
+    if (!target || target === state.language || state.languageLock || state.running) return;
+    const code = elements.editor.value;
+    state.languageSwitch = {from: state.language, toDraft: state.drafts[target]};
+    setLanguage(target, code, fromDraft);
+    elements.languageNoteText.textContent = `這段看起來是 ${LANGUAGE_NAMES[target]}，已幫你把語言切過去。`;
+    elements.languageUndoButton.textContent = `改回 ${LANGUAGE_NAMES[state.languageSwitch.from]}`;
+    elements.languageNote.hidden = false;
+    elements.languageSelect.classList.add("is-flash");
+    setTimeout(() => elements.languageSelect.classList.remove("is-flash"), 1500);
+}
+
+// Back to the old language with the code as it is now; this code is not switched again.
+function undoLanguageSwitch() {
+    const {from, toDraft} = state.languageSwitch;
+    setLanguage(from, elements.editor.value, toDraft);
+    state.languageLock = true;
+    elements.languageNote.hidden = true;
+}
+
+// `code` replaces the next language's draft (it moves with the switch) and `fromDraft` is
+// kept as the old language's draft.
+function setLanguage(nextLanguage, code = null, fromDraft = elements.editor.value) {
     if (nextLanguage === state.language) return;
 
-    state.drafts[state.language] = elements.editor.value;
+    elements.languageSelect.value = nextLanguage;
+    state.drafts[state.language] = fromDraft;
+    if (code !== null) state.drafts[nextLanguage] = code;
     state.stdinDrafts[state.language] = elements.stdinEditor.value;
     state.choices[state.language] = state.choice;
     state.language = nextLanguage;
