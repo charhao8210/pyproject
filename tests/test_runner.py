@@ -396,6 +396,26 @@ def test_a_print_line_shows_its_own_output() -> None:
     assert result["steps"][-1]["stdout"] == "3\n"
 
 
+def test_a_line_that_calls_a_function_shows_the_state_after_the_call() -> None:
+    # User's choice 2026-11-19: not the callee's first line, where nothing has happened yet.
+    code = "def show(v):\n    print(v)\n    return v * 2\nx = show(4)\ny = x\n"
+    steps = run_debugger(code)["steps"]
+    call_line = next(step for step in steps if step["line"] == 4 and step["event"] == "line")
+    assert call_line["stdout"] == "4\n"
+    inside = next(step for step in steps if step["line"] == 2 and step["event"] == "line")
+    assert inside["stdout"] == "4\n"
+
+
+@requires_cpp
+def test_a_cpp_line_that_calls_a_function_shows_the_state_after_the_call() -> None:
+    code = (
+        "#include <iostream>\nint show(int v) {\n    std::cout << v << ' ';\n    return v * 2;\n}\n"
+        "int main() {\n    int x = show(4);\n    std::cout << x;\n}\n"
+    )
+    steps = run_debugger(code, language="cpp")["steps"]
+    assert next(step["stdout"] for step in steps if step["line"] == 7) == "4 "
+
+
 @requires_cpp
 def test_a_cpp_output_line_shows_its_own_output() -> None:
     result = run_debugger(

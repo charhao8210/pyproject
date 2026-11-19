@@ -340,8 +340,10 @@ def _show_line_effects(
     The current-line view keeps its own step, and the names either state draws stay out of Variables. `at_step` is the step drawn.
     """
     own = [(step["visualization"], step["views"]) for step in steps]
+    returns = _returns(steps)
     for index, step in enumerate(steps):
-        after = index + 1
+        # A line that calls a function (`head = Node(7)`) shows the state once the call is back.
+        after = returns[index] if returns[index] is not None else index + 1
         if after >= len(steps) or step.get("event") in {"exception", "stopped"}:
             continue
         # The program's output too: `cout << x` shows x on its own line, not one step later.
@@ -356,6 +358,21 @@ def _show_line_effects(
         }
     if final_stdout is not None and steps:
         steps[-1]["stdout"] = final_stdout
+
+
+def _returns(steps: list[dict[str, Any]]) -> list[int | None]:
+    """Each step's next step in its own frame or a caller (None when the trace ends first)."""
+    # shortcut: C++ stacks are `backtrace 30`, so past 30 nested calls every frame looks alike
+    # and a call line shows the callee's first stop; read the real depth if that matters.
+    depths = [step.get("depth", len(step.get("stack") or [])) for step in steps]
+    found: list[int | None] = [None] * len(steps)
+    shallower: list[int] = []
+    for index in range(len(steps) - 1, -1, -1):
+        while shallower and depths[shallower[-1]] > depths[index]:
+            shallower.pop()
+        found[index] = shallower[-1] if shallower else None
+        shallower.append(index)
+    return found
 
 
 def _moved_by_line(step: dict[str, Any], source_lines: list[str], language: str) -> set[str]:
@@ -384,6 +401,9 @@ def _after_line(
     if mine.get("renderer") in {"graph", "stack", "queue", "linked_list"}:
         # What the line reads (`dis[n]`, `q.front()`) is read before it runs, so it is this step's.
         shown["reading"] = mine.get("reading", [])
+        if mine.get("renderer") == "linked_list":
+            # `head = head->next` reads a node no variable reaches afterwards: it is not drawn.
+            shown["reading"] = [node for node in shown["reading"] if node in after.get("values", {})]
     if mine.get("container") and after.get("container"):
         shown["container"] = {**after["container"], "reading": mine["container"].get("reading", [])}
     uses = [*after.get("uses", []), *mine.get("uses", [])]

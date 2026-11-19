@@ -212,3 +212,24 @@ int main() {
             cell = view["written"][0]
             assert {**cell, "role": "current"} in view["active"]
             assert f"rr,cc = ({cell['row']}, {cell['column']})" in view["coordinates"]
+
+
+def test_a_cell_moved_over_two_lines_stays_put_until_both_have_run() -> None:
+    # User report 2026-11-19: `c = ma[0]` drew Current at (new c, old r), a cell never visited.
+    code = """n, m = map(int, input().split())
+v = [[int(x) for x in input().split()] for _ in range(n)]
+c, r = map(int, input().split())
+ma = [1, 1]
+v[c][r] = 0
+c = ma[0]
+r = ma[1]
+v[c][r] = 0
+"""
+    steps = run_debugger(code, stdin_text="3 3\n1 2 3\n4 5 6\n7 8 9\n2 0\n", language="python")["steps"]
+
+    def current(line: int) -> dict:
+        view = next(step["views"]["grid:v"] for step in steps if step["line"] == line)
+        return next(cell for cell in view["active"] if cell["role"] == "current")
+
+    assert (current(6)["row"], current(6)["column"]) == (2, 0)
+    assert (current(7)["row"], current(7)["column"]) == (1, 1)

@@ -131,11 +131,14 @@ def _assert_null_head(view) -> None:
 def test_a_pointer_set_to_none_is_drawn_null_not_carried() -> None:
     steps = run_debugger(PY14)["steps"]
     _assert_null_head(_at_line(steps, 5))
-    pointed = _at_line(steps, 8)
-    assert [_texts(row) for row in pointed["rows"]] == [["7"]] and _pointers(pointed["rows"][0]) == {"head": "7"}
+    # `head = Node(7)` calls `__init__`: its step shows the state once the call is back.
+    for line in (7, 8):
+        pointed = _at_line(steps, line)
+        assert [_texts(row) for row in pointed["rows"]] == [["7"]] and _pointers(pointed["rows"][0]) == {"head": "7"}
     emptied = _at_line(steps, 9)
     _assert_null_head(emptied)
-    assert emptied["rows"] == [] and emptied["size"] == 0
+    # The node `head.next` read is no longer drawn, so nothing is marked Reading.
+    assert emptied["rows"] == [] and emptied["size"] == 0 and emptied["reading"] == []
     # `result` never held a node: a None that is not a pointer is not drawn.
     assert all("result" not in step["visualization"].get("nulls", []) for step in steps)
 
