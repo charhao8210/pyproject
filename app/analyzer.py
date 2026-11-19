@@ -351,9 +351,15 @@ def _show_line_effects(
         mine_auto, mine_views = own[index]
         next_auto, next_views = own[after]
         moved = _moved_by_line(step, source_lines, language)
-        step["visualization"] = _after_line(mine_auto, next_auto, after, moved)
+        following = steps[after]
+        moved_next = (
+            _moved_by_line(following, source_lines, language)
+            if following.get("function") == step.get("function")
+            else set()
+        )
+        step["visualization"] = _after_line(mine_auto, next_auto, after, moved, moved_next)
         step["views"] = {
-            view_id: _after_line(model, next_views.get(view_id, model), after, moved)
+            view_id: _after_line(model, next_views.get(view_id, model), after, moved, moved_next)
             for view_id, model in mine_views.items()
         }
     if final_stdout is not None and steps:
@@ -390,12 +396,20 @@ def _moved_by_line(step: dict[str, Any], source_lines: list[str], language: str)
 
 
 def _after_line(
-    mine: dict[str, Any], after: dict[str, Any], after_index: int, moved: set[str] = frozenset()
+    mine: dict[str, Any],
+    after: dict[str, Any],
+    after_index: int,
+    moved: set[str] = frozenset(),
+    moved_next: set[str] = frozenset(),
 ) -> dict[str, Any]:
     if mine.get("renderer") == "execution" or after.get("renderer") != mine.get("renderer"):
         return mine
     shown = {**after, "at_step": after_index}
-    if mine.get("renderer") == "grid" and mine.get("ready") and not moved & set(mine.get("uses", ())):
+    # `c = ma[0]` then `r = ma[1]`: after the first line (new c, old r) is a cell nobody is at.
+    half_moved = any(
+        len(moved & set(pair)) == 1 and (set(pair) - moved) & moved_next for pair in mine.get("pairs", ())
+    )
+    if mine.get("renderer") == "grid" and mine.get("ready") and (half_moved or not moved & set(mine.get("uses", ()))):
         # `a[rr][cc] += num` works on the cell rr, cc hold now, not the one after C++'s `cc++`.
         shown["active"], shown["coordinates"] = mine.get("active", []), mine.get("coordinates", [])
     if mine.get("renderer") in {"graph", "stack", "queue", "linked_list"}:
@@ -1391,7 +1405,7 @@ def _grid_visualization(
     # `vis[nx][ny]` marks the cell as much as `a[nx][ny]`: the visited table is drawn on it.
     drawn = {*names, visited_name}
     indexed = [(row, column) for grid, row, column in cell_subscripts if grid in drawn]
-    active, active_names, coordinates = _active_cells(scope, row_count, column_count, indexed, guess=picks is None)
+    active, active_names, coordinates, pairs = _active_cells(scope, row_count, column_count, indexed, guess=picks is None)
     frontier_name, frontier = _frontier_cells(scope, row_count, column_count, None if picks is None else picks.get("frontier", ""))
     queue = scope.get(frontier_name) if frontier_name else None
     return {
@@ -1412,6 +1426,7 @@ def _grid_visualization(
         # Coordinates as numbers and the queue in its order: the coloured cells alone show
         # neither which variable holds a cell nor which cell leaves the queue next.
         "coordinates": coordinates,
+        "pairs": pairs,
         "queue": (
             {"name": frontier_name, "entries": [f"({item[0]}, {item[1]})" for item in queue[:MAX_VISUAL_ITEMS]]}
             if isinstance(queue, list)
@@ -2214,10 +2229,11 @@ def _active_cells(
     columns: int,
     indexed: Iterable[tuple[str, str]] = (),
     guess: bool = True,
-) -> tuple[list[dict[str, Any]], list[str], list[str]]:
-    """Cells the code is at (`row, col`, a pair `cur`), the names it read them from, and a
+) -> tuple[list[dict[str, Any]], list[str], list[str], list[list[str]]]:
+    """Cells the code is at (`row, col`, a pair `cur`), the names it read them from, a
     readout per coordinate pair (`row,col = (0, 1)`), also for one off the grid (`nr = -1`),
-    which keeps the names out of Variables whether or not the cell is on the grid.
+    which keeps the names out of Variables whether or not the cell is on the grid, and the
+    name pairs themselves.
 
     `indexed` pairs come from the code (`a[rr][cc]`): they mark in the code's order whatever
     their names, and a name pattern below with the same two names is not used. Without `guess`
@@ -2241,6 +2257,7 @@ def _active_cells(
     cells: list[dict[str, Any]] = []
     names: list[str] = []
     readouts: list[str] = []
+    pairs: list[list[str]] = []
     seen: set[tuple[int, int, str]] = set()
     # A cell held as a pair: `pii now = q.front();`
     for name in ("now", "cur", "current", "cell", "top", "front", "u") if guess else ():
@@ -2262,6 +2279,7 @@ def _active_cells(
         if not _is_index(row) or not _is_index(column):
             continue
         names.extend((row_name, column_name))
+        pairs.append([row_name, column_name])
         inside = 0 <= row < rows and 0 <= column < columns
         readouts.append(f"{row_name},{column_name} = ({row}, {column}){'' if inside else ' off the grid'}")
         if not inside:
@@ -2270,7 +2288,7 @@ def _active_cells(
         if marker not in seen:
             cells.append({"row": row, "column": column, "role": role})
             seen.add(marker)
-    return cells, names, readouts
+    return cells, names, readouts, pairs
 
 
 def _frontier_cells(
