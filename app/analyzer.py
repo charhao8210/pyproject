@@ -7,7 +7,7 @@ from typing import Any, Callable, Iterable
 
 from .chooser import CHOICES
 from .containers import container_kinds, container_model, queue_companion
-from .linked_list import linked_list_model
+from .linked_list import linked_list_model, pointer_targets
 from .loops import loop_jumps, loop_ranges
 from .recursion import build_recursion_tree
 from .serializer import MAX_ITEMS
@@ -40,6 +40,8 @@ class AlgorithmProfile:
     pair_vertex: int | None = None
     # How each distance table marks "not reached", decided from the whole trace (`_reached_rules`).
     reached_rules: tuple[tuple[str, str], ...] = ()
+    # Names that point at a list node somewhere in the trace (`linked_list_model` draws them null).
+    list_pointers: tuple[str, ...] = ()
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -162,6 +164,12 @@ def analyze_execution(
     plan = _choice_plan(chosen, scopes, catalog) if chosen else None
     if plan:
         profile = replace(profile, kind=chosen["algorithm"], name=plan["label"], renderer=plan["renderer"], confidence=1.0, evidence=())
+    if profile.renderer == "linked_list" or any(view["renderer"] == "linked_list" for view in catalog):
+        # Names that hold a node somewhere in the trace, and the picked one: null, they are `head → ∅`.
+        pointers = {name for step in steps for name in pointer_targets(step)[0]}
+        if plan and plan["renderer"] == "linked_list" and plan["name"]:
+            pointers.add(plan["name"])
+        profile = replace(profile, list_pointers=tuple(sorted(pointers)))
     # Once an algorithm is picked, the View picker's grids and graphs mark only picked variables too.
     view_picks = {key: plan.get(key, "") for key in ("visited", "distance", "frontier")} if plan else None
     source_lines = source.split("\n")
@@ -701,7 +709,7 @@ def _view_model(
     if renderer in {"stack", "queue"}:
         return container_model(renderer, name, scope.get(name), line_text, language)
     if renderer == "linked_list":
-        return linked_list_model(step, line_text, language)
+        return linked_list_model(step, line_text, language, profile.list_pointers)
     if renderer == "recursion_tree":
         return {"renderer": "recursion_tree", **(recursion_state or {"current": None, "uses": []})}
     if renderer == "call_tree":
@@ -1234,7 +1242,7 @@ def _visualization_for(
     if profile.renderer in {"stack", "queue"}:
         return container_model(profile.renderer, profile.focus[0], scope.get(profile.focus[0]), line_text, language)
     if profile.renderer == "linked_list":
-        return linked_list_model(step, line_text, language)
+        return linked_list_model(step, line_text, language, profile.list_pointers)
     if profile.renderer == "call_tree":
         return _call_tree_visualization(step)
     return _execution_visualization(step)

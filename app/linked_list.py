@@ -11,7 +11,7 @@ field (val/value/data/key). Built from the step's serialized values, which keep 
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, Iterable
 
 from .containers import QUEUE_HEAD, QUEUE_TAIL, entry_text
 
@@ -72,9 +72,20 @@ def pointer_targets(step: dict[str, Any]) -> tuple[dict[str, Any], dict[Any, dic
     return targets, nodes
 
 
-def linked_list_model(step: dict[str, Any], line_text: str, language: str) -> dict[str, Any]:
+def linked_list_model(
+    step: dict[str, Any], line_text: str, language: str, pointer_names: Iterable[str] = ()
+) -> dict[str, Any]:
+    """`pointer_names` held a node somewhere in the trace: null now, they are drawn `head → ∅`
+    (`nulls`), so an emptied list is not mistaken for one out of scope and carried."""
     targets, nodes = pointer_targets(step)
-    if not targets:
+    pointer_names = set(pointer_names)
+    scope = {**(step.get("globals") or {}), **(step.get("locals") or {})}
+    nulls = [
+        name
+        for name, value in scope.items()
+        if name in pointer_names and isinstance(value, dict) and value.get("type") == "none"
+    ]
+    if not targets and not nulls:
         return {"renderer": "linked_list", "ready": False}
     following: dict[Any, Any] = {}
     for object_id, node in nodes.items():
@@ -148,7 +159,7 @@ def linked_list_model(step: dict[str, Any], line_text: str, language: str) -> di
     return {
         "renderer": "linked_list",
         "ready": True,
-        "name": next(iter(targets)),
+        "name": next(iter([*targets, *nulls])),
         "size": len(placed),
         # Some chain goes on past what was read, so `size` is a lower bound.
         "partial": any(end["kind"] == "more" for _, end, _ in chains),
@@ -156,5 +167,6 @@ def linked_list_model(step: dict[str, Any], line_text: str, language: str) -> di
         # Every drawn node's text by id, for `_mark_writes`.
         "values": values,
         "reading": list(dict.fromkeys(reading)),
-        "uses": list(targets),
+        "nulls": nulls,
+        "uses": [*targets, *nulls],
     }

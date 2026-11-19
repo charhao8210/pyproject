@@ -8,6 +8,11 @@ import pytest
 from app.runner import run_debugger
 from app.serializer import serialize_value
 
+requires_cpp = pytest.mark.skipif(
+    not (shutil.which("g++") and shutil.which("gdb")),
+    reason="g++ and gdb are required for C++ tracing tests",
+)
+
 NODE = "class Node:\n    def __init__(self, val):\n        self.val = val\n        self.next = None\n\n"
 
 
@@ -84,10 +89,73 @@ def test_reversing_a_list_draws_one_row_per_chain() -> None:
     assert [["4", "3", "2", "1"]] in shapes
 
 
+PY14 = """class Node:
+    def __init__(self, value):
+        self.value = value
+        self.next = None
+head = None
+started_empty = head is None
+head = Node(7)
+value = head.value
+head = head.next
+ended_empty = head is None
+result = None
+print(started_empty, value, ended_empty)
+"""
+
+L01 = """#include <iostream>
+struct Node { int value; Node* next; };
+int main() {
+    Node* head = nullptr;
+    bool startedEmpty = head == nullptr;
+    Node first{7, nullptr};
+    head = &first;
+    int value = head->value;
+    head = head->next;
+    bool endedEmpty = head == nullptr;
+    std::cout << startedEmpty << ' ' << value << ' ' << endedEmpty << '\\n';
+}
+"""
+
+
+def _at_line(steps, line):
+    return next(step["visualization"] for step in steps if step["line"] == line and step["event"] == "line")
+
+
+def _assert_null_head(view) -> None:
+    # A null pointer is drawn `head → ∅`, not the last list carried as "last known state".
+    assert view["ready"] and not view.get("carried")
+    assert view["nulls"] == ["head"] and "head" in view["uses"]
+
+
+def test_a_pointer_set_to_none_is_drawn_null_not_carried() -> None:
+    steps = run_debugger(PY14)["steps"]
+    _assert_null_head(_at_line(steps, 5))
+    pointed = _at_line(steps, 8)
+    assert [_texts(row) for row in pointed["rows"]] == [["7"]] and _pointers(pointed["rows"][0]) == {"head": "7"}
+    emptied = _at_line(steps, 9)
+    _assert_null_head(emptied)
+    assert emptied["rows"] == [] and emptied["size"] == 0
+    # `result` never held a node: a None that is not a pointer is not drawn.
+    assert all("result" not in step["visualization"].get("nulls", []) for step in steps)
+
+
+@requires_cpp
+def test_a_cpp_pointer_set_to_nullptr_is_drawn_null_not_carried() -> None:
+    steps = run_debugger(L01, language="cpp")["steps"]
+    _assert_null_head(_at_line(steps, 4))
+    pointed = _at_line(steps, 7)
+    assert _pointers(pointed["rows"][0])["head"] == "7"
+    emptied = _at_line(steps, 9)
+    _assert_null_head(emptied)
+    assert emptied["rows"] == [] and emptied["size"] == 0
+
+
 def test_the_page_draws_linked_lists() -> None:
     root = Path(__file__).resolve().parents[1]
     script = (root / "app" / "static" / "app.js").read_text(encoding="utf-8")
     assert "linked_list: renderLinkedListAlgorithm" in script
+    assert "view.nulls" in script and '"list-node is-null"' in script
     assert '"Linked list"' in (root / "app" / "static" / "terms.js").read_text(encoding="utf-8")
 
 
@@ -99,11 +167,6 @@ def test_a_list_longer_than_what_is_read_ends_in_more() -> None:
     assert view["rows"][0]["end"] == {"kind": "more"} and view["partial"]
     assert "…" not in _texts(view["rows"][0])
 
-
-requires_cpp = pytest.mark.skipif(
-    not (shutil.which("g++") and shutil.which("gdb")),
-    reason="g++ and gdb are required for C++ tracing tests",
-)
 
 CPP_LIST = """#include <bits/stdc++.h>
 using namespace std;

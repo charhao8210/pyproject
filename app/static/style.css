@@ -1895,6 +1895,11 @@ h2 {
     font-size: 15px;
 }
 
+/* A null pointer's target: one `∅` box, no value or link part. */
+.list-node.is-null {
+    grid-template-columns: 44px;
+}
+
 .list-node > span {
     display: grid;
     place-items: center;

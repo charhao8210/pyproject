@@ -2452,6 +2452,23 @@ function renderLinkedListAlgorithm(view) {
         return {row, line, boxes};
     });
     elements.algorithmView.append(...rows.map(({line}) => line));
+    // A pointer that is null now (`head = head->next` past the last node): `head ↓ ∅`.
+    (view.nulls || []).forEach((name) => {
+        const line = document.createElement("div");
+        line.className = "list-view";
+        const wrap = document.createElement("div");
+        wrap.className = "list-node-wrap";
+        const pointers = document.createElement("div");
+        pointers.className = "list-pointers";
+        pointers.append(textSpan(name, "container-tag is-strong"), textSpan("↓", "container-tag"));
+        const empty = document.createElement("div");
+        empty.className = "list-node is-null";
+        empty.title = `${name} is null`;
+        empty.append(textSpan("∅", ""));
+        wrap.append(pointers, empty);
+        line.append(wrap);
+        elements.algorithmView.append(line);
+    });
     // A cycle: a line from the last node back under the row to the node it links to.
     rows.forEach(({row, line, boxes}) => {
         if (row.end.kind !== "cycle") return;
