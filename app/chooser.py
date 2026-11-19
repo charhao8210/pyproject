@@ -38,8 +38,9 @@ OPTIONAL_SLOTS = {
 
 # Which shapes of variable fit each slot, and the names put first.
 _FITS = {
-    # A set is drawn as bars of its sorted values, a list of lists as one cell per row.
-    "array": ("1d", "set", "2d"),
+    # A set is drawn as bars of its sorted values, a list of lists as one cell per row, and
+    # characters (a map's rows, one string) one cell per character, after the numbers.
+    "array": ("1d", "set", "2d", "rows", "text"),
     # A character map (`char a[N][M]`, `vector<string>`) before number tables (`dist`, `vis`).
     "graph": ("rows", "2d", "map"),
     "queue": ("queue", "1d"),
@@ -148,11 +149,15 @@ def _python_shape(value: ast.expr, node_classes: set[str]) -> str | None:
         return "set"
     if isinstance(value, ast.Attribute) and value.attr == "next" and node_classes:
         return "node"
+    if isinstance(value, ast.Constant) and isinstance(value.value, str):
+        return "text"
     if isinstance(value, ast.Call):
         function = value.func
         called = function.id if isinstance(function, ast.Name) else function.attr if isinstance(function, ast.Attribute) else ""
         if called in node_classes:
             return "node"
+        if called in {"input", "strip", "rstrip", "lstrip", "upper", "lower"}:
+            return "text"
         if called == "deque":
             return "queue"
         if called in {"dict", "defaultdict"}:
@@ -190,10 +195,14 @@ def _cpp_shapes(source: str) -> dict[str, str]:
         if _STRING_ROWS.match(base) or (re.fullmatch(r"(?:std::)?string", base) and dimensions == 1):
             shapes[name] = "rows"
             continue
+        if re.fullmatch(r"(?:std::)?string", base) and dimensions == 0:
+            shapes[name] = "text"
+            continue
         classified = classify_type(type_text, dimensions, model.aliases, model.node_types)
         kind = classified[0] if classified else None
         if kind == "array" and classified[1] == "text":
-            continue  # a C string
+            shapes[name] = "text"  # a C string
+            continue
         if kind == "matrix" and classified[1] == "text":
             shapes[name] = "rows"  # `char a[N][M]`: a character map
             continue

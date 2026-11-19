@@ -253,7 +253,8 @@ def run_cpp_debugger(
         status = "exception"
         error = _debugger_error(incomplete_line, trace_errors)
     if steps:
-        steps[-1]["stdout"] = stdout
+        # The last stop keeps the output from before its line; the analyzer shows each step's
+        # output after its line, and `stdout` (all of it) on the last step.
         if error:
             steps[-1]["exception"] = error
             steps[-1]["event"] = "exception" if status == "exception" else "stopped"
@@ -283,7 +284,9 @@ def run_cpp_debugger(
         "capped": capped,
         "loop_stop_limit": MAX_LOOP_LINE_STOPS,
     }
-    result["algorithm"] = analyze_execution(source, steps, language="cpp", extra_views=extra_views, choice=choice)
+    result["algorithm"] = analyze_execution(
+        source, steps, language="cpp", extra_views=extra_views, choice=choice, final_stdout=stdout
+    )
     return result
 
 
@@ -1665,7 +1668,7 @@ def _serialize_cpp_value(value: str, identity: str) -> dict[str, Any]:
         return {"type": "str", "value": _decode_c_string(character.group(1))}
     if len(value) >= 3 and value[0] == "'" and value[-1] == "'":
         return {"type": "str", "value": _decode_c_string(value[1:-1])}
-    if re.match(r"^\{(?:static npos = \d+, )?_M_dataplus = ", value):
+    if re.match(r"^\{(?:static npos = (?:\d+|<optimized out>), )?_M_dataplus = ", value):
         string_object = re.search(
             r"_M_p = 0x[0-9a-fA-F]+(?: <[^>]*>)? \"((?:\\.|[^\"\\])*)\"(\.\.\.)?",
             value,
@@ -2002,7 +2005,8 @@ def _clean_program_output(text: str) -> str:
     cleaned: list[str] = []
     metadata = re.compile(
         r"^(?:Breakpoint \d+|\[Inferior |\[New Thread |\[Thread |"
-        r"During startup program |warning: )"
+        # GDB's own warnings go to its stderr; a "warning: " line here is the program's.
+        r"During startup program )"
     )
     signal = re.compile(r"^(?:Program|Thread \d+.*?) received signal ")
     for line in text.splitlines(keepends=True):

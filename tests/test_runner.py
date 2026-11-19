@@ -386,3 +386,42 @@ int main() {
     dp = final["globals"]["dp"]
     assert dp["truncated"] is True and len(dp["items"]) == 30
     assert _plain(dp)[1][:3] == [0, 0, 5]
+
+
+def test_a_print_line_shows_its_own_output() -> None:
+    # Each step shows the state after its highlighted line, output included (user report 2026-11-18).
+    result = run_debugger("x = 3\nprint(x)\ny = 1\n")
+    lines = {step["line"]: step["stdout"] for step in result["steps"] if step["event"] == "line"}
+    assert lines[1] == "" and lines[2] == "3\n" and lines[3] == "3\n"
+    assert result["steps"][-1]["stdout"] == "3\n"
+
+
+@requires_cpp
+def test_a_cpp_output_line_shows_its_own_output() -> None:
+    result = run_debugger(
+        """#include <iostream>
+using namespace std;
+int main() {
+    int x = 3;
+    cout << x << " ";
+    cout << 10;
+}
+""",
+        language="cpp",
+    )
+    lines = {step["line"]: step["stdout"] for step in result["steps"]}
+    assert lines[4] == "" and lines[5] == "3 " and lines[6] == "3 10"
+
+
+@requires_cpp
+def test_a_cpp_line_starting_with_warning_is_program_output() -> None:
+    # User report 2026-11-19: the output filter took it for a GDB warning and dropped it.
+    result = run_debugger(
+        '#include <iostream>\nint main() {\n    std::cout << "warning: check input\\n";\n'
+        '    std::cout << "actual result\\n";\n}\n',
+        language="cpp",
+    )
+    assert [step["stdout"] for step in result["steps"]] == [
+        "warning: check input\n",
+        "warning: check input\nactual result\n",
+    ]

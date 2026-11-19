@@ -32,6 +32,9 @@ class AlgorithmProfile:
     # (container, index variable) for every `a[i]` in the source: an index marker is drawn
     # only on a container that variable indexes (`l[i]` does not put `i` on `v`).
     subscripts: frozenset[tuple[str, str]] = frozenset()
+    # (grid, row variable, column variable) for every `a[rr][cc]` in the source, in order: the
+    # cell a grid view marks as current, whatever the names (user's choice 2026-11-18).
+    cell_subscripts: tuple[tuple[str, str, str], ...] = ()
     # Which element of a weighted adjacency pair is the vertex (0 or 1), read from the code
     # (`w = e.first; v = e.second`); None when the code does not say.
     pair_vertex: int | None = None
@@ -122,9 +125,11 @@ def analyze_execution(
     language: str = "python",
     extra_views: Iterable[str] = (),
     choice: dict[str, Any] | None = None,
+    final_stdout: str | None = None,
 ) -> dict[str, Any]:
     """`choice` is what the user picked before Run (`chooser.CHOICES`): its views are drawn as
-    picked instead of guessed, and a picked variable without data says so (`missing`)."""
+    picked instead of guessed, and a picked variable without data says so (`missing`).
+    `final_stdout` is the whole output when the last step stops before its line runs (C++)."""
     decoded: dict[int, Any] = {}
     scopes = [_decode_scope(step, decoded) for step in steps]
     shapes = _runtime_shapes(scopes, _edge_id_lists(source))
@@ -136,7 +141,12 @@ def analyze_execution(
         features.visit(tree)
         profile = _classify(features, shapes)
     profile = _with_focus(profile, source, language)
-    profile = replace(profile, subscripts=_subscripts(source), pair_vertex=_pair_vertex_position(source))
+    profile = replace(
+        profile,
+        subscripts=_subscripts(source),
+        cell_subscripts=_cell_subscripts(source),
+        pair_vertex=_pair_vertex_position(source),
+    )
     kinds = container_kinds(source, language)
     if kinds and profile.renderer in {"array", "execution"}:
         # A program built around a stack or queue draws it, not its arrays.
@@ -152,6 +162,8 @@ def analyze_execution(
     plan = _choice_plan(chosen, scopes, catalog) if chosen else None
     if plan:
         profile = replace(profile, kind=chosen["algorithm"], name=plan["label"], renderer=plan["renderer"], confidence=1.0, evidence=())
+    # Once an algorithm is picked, the View picker's grids and graphs mark only picked variables too.
+    view_picks = {key: plan.get(key, "") for key in ("visited", "distance", "frontier")} if plan else None
     source_lines = source.split("\n")
     recursion_tree, recursion_steps = (
         build_recursion_tree(steps, language)
@@ -207,7 +219,7 @@ def analyze_execution(
             if view.get("pending"):
                 continue
             recursion_state = recursion_steps[index] if recursion_steps else None
-            model = _view_model(view, profile, scope, step, recursion_state, language, extents, line_text)
+            model = _view_model(view, profile, scope, step, recursion_state, language, extents, line_text, view_picks)
             model = _carry(view["id"], model, last_ready, step)
             _mark_writes(model, previous.get(view["id"]), scope, previous_scope)
             _mark_line_reads(model, step, scope, source_lines, language)
@@ -217,7 +229,7 @@ def analyze_execution(
         step["views"] = views
 
     _orient_graphs(steps)
-    _show_line_effects(steps)
+    _show_line_effects(steps, final_stdout, source_lines, language)
 
     if plan and not _choice_drawn(plan, steps):
         for step in steps:
@@ -306,7 +318,12 @@ def _is_single_value(value: Any) -> bool:
     return isinstance(value, (int, float, str, bool)) and not isinstance(value, list)
 
 
-def _show_line_effects(steps: list[dict[str, Any]]) -> None:
+def _show_line_effects(
+    steps: list[dict[str, Any]],
+    final_stdout: str | None = None,
+    source_lines: list[str] = (),
+    language: str = "python",
+) -> None:
     """Draw each step's views as they are once its highlighted line has run.
 
     A stop comes before its line runs, so the state recorded there misses what that line does:
@@ -319,19 +336,43 @@ def _show_line_effects(steps: list[dict[str, Any]]) -> None:
         after = index + 1
         if after >= len(steps) or step.get("event") in {"exception", "stopped"}:
             continue
+        # The program's output too: `cout << x` shows x on its own line, not one step later.
+        step["stdout"] = steps[after]["stdout"]
         mine_auto, mine_views = own[index]
         next_auto, next_views = own[after]
-        step["visualization"] = _after_line(mine_auto, next_auto, after)
+        moved = _moved_by_line(step, source_lines, language)
+        step["visualization"] = _after_line(mine_auto, next_auto, after, moved)
         step["views"] = {
-            view_id: _after_line(model, next_views.get(view_id, model), after)
+            view_id: _after_line(model, next_views.get(view_id, model), after, moved)
             for view_id, model in mine_views.items()
         }
+    if final_stdout is not None and steps:
+        steps[-1]["stdout"] = final_stdout
 
 
-def _after_line(mine: dict[str, Any], after: dict[str, Any], after_index: int) -> dict[str, Any]:
+def _moved_by_line(step: dict[str, Any], source_lines: list[str], language: str) -> set[str]:
+    """Single values the step's own line changes. Python stops on every line, so that is every
+    change up to the frame's next stop; C++ also runs a loop's `cc++` before it, which is not
+    the line's."""
+    usage = step.get("usage") or {}
+    moved = {*usage.get("next", {}), *usage.get("appearing", {})}
+    line = step.get("line")
+    if language != "cpp" or not isinstance(line, int) or not 0 < line <= len(source_lines):
+        return moved
+    from .cpp_runner import _may_write  # cpp_runner imports this module
+
+    return {name for name in moved if _may_write(source_lines[line - 1], name)}
+
+
+def _after_line(
+    mine: dict[str, Any], after: dict[str, Any], after_index: int, moved: set[str] = frozenset()
+) -> dict[str, Any]:
     if mine.get("renderer") == "execution" or after.get("renderer") != mine.get("renderer"):
         return mine
     shown = {**after, "at_step": after_index}
+    if mine.get("renderer") == "grid" and mine.get("ready") and not moved & set(mine.get("uses", ())):
+        # `a[rr][cc] += num` works on the cell rr, cc hold now, not the one after C++'s `cc++`.
+        shown["active"], shown["coordinates"] = mine.get("active", []), mine.get("coordinates", [])
     if mine.get("renderer") in {"graph", "stack", "queue", "linked_list"}:
         # What the line reads (`dis[n]`, `q.front()`) is read before it runs, so it is this step's.
         shown["reading"] = mine.get("reading", [])
@@ -424,6 +465,14 @@ def _subscripts(source: str) -> frozenset[tuple[str, str]]:
     return frozenset((match.group(1), match.group(2)) for match in _SUBSCRIPT.finditer(source))
 
 
+_CELL_SUBSCRIPT = re.compile(r"(?<![\w.])([A-Za-z_]\w*)\s*\[\s*([A-Za-z_]\w*)\s*\]\s*\[\s*([A-Za-z_]\w*)\s*\]")
+
+
+def _cell_subscripts(source: str) -> tuple[tuple[str, str, str], ...]:
+    """`(a, rr, cc)` for each `a[rr][cc]` in the source, first seen first."""
+    return tuple(dict.fromkeys(match.groups() for match in _CELL_SUBSCRIPT.finditer(source)))
+
+
 
 def _with_focus(profile: AlgorithmProfile, source: str, language: str) -> AlgorithmProfile:
     """Point a generic array profile at the array its loops write, not the input."""
@@ -478,6 +527,13 @@ def _choice_plan(choice: dict[str, Any], scopes: list[dict[str, Any]], catalog: 
 
     if algorithm in {"array", "sorting"}:
         name = picked["array"]
+        # Characters (approved 2026-11-18) and number tables whose rows never differ in length
+        # (2026-11-19): a plain grid with indexes. A char map being read has a short last row.
+        filled = [value for value in values(name) if value]
+        if any(_is_char_grid(value) for value in filled) or (filled and all(_is_grid(value) for value in filled)):
+            return {**plan, "renderer": "grid", "name": name, "plain": True}
+        if any(isinstance(value, str) for value in values(name)):
+            return {**plan, "renderer": "cells", "name": name}
         numeric = any(_numeric_array_projection(value) is not None for value in values(name))
         # A list of words or pairs cannot be bars; its cells still show it.
         renderer = "cells" if not numeric and any(isinstance(value, list) for value in values(name)) else "array"
@@ -518,7 +574,11 @@ def _chosen_model(
     if renderer == "graph":
         return _graph_visualization(scope, name, profile.pair_vertex, plan["labels"], picks, dict(profile.reached_rules))
     if renderer == "grid":
-        return _grid_visualization(scope, step, name, extents, dict(profile.reached_rules), picks)
+        model = _grid_visualization(scope, step, name, extents, dict(profile.reached_rules), picks, profile.cell_subscripts)
+        if plan.get("plain") and model.get("ready"):
+            # Characters being simulated, not a maze: `#` is a character, and cells carry indexes.
+            model.update(walls=[], plain=True)
+        return model
     if renderer == "recursion_tree":
         if recursion_state is None:
             return {"renderer": renderer, "ready": False}
@@ -627,16 +687,17 @@ def _view_model(
     language: str,
     extents: dict[str, tuple[int, int]] | None = None,
     line_text: str = "",
+    picks: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     renderer, name = view["renderer"], view["variable"]
     if renderer == "grid":
-        return _grid_visualization(scope, step, name, extents, dict(profile.reached_rules))
+        return _grid_visualization(scope, step, name, extents, dict(profile.reached_rules), picks, profile.cell_subscripts)
     if renderer == "array":
         return _array_visualization(scope, profile, name, extents)
     if renderer == "cells":
         return _cells_visualization(scope, profile, name, language, extents)
     if renderer == "graph":
-        return _graph_visualization(scope, name, profile.pair_vertex)
+        return _graph_visualization(scope, name, profile.pair_vertex, None, picks, dict(profile.reached_rules))
     if renderer in {"stack", "queue"}:
         return container_model(renderer, name, scope.get(name), line_text, language)
     if renderer == "linked_list":
@@ -733,7 +794,8 @@ def _mark_writes(
     # array keeps its length, and its drawn length (cut at the last used entry) says nothing.
     raw = scope.get(model["name"])
     old_raw = (previous_scope or {}).get(model["name"])
-    if not (isinstance(raw, list) and isinstance(old_raw, list) and len(raw) != len(old_raw)) or model.get("truncated"):
+    # A string grows and shrinks like a list (`s += 'x'` is a push).
+    if not (isinstance(raw, (list, str)) and isinstance(old_raw, (list, str)) and len(raw) != len(old_raw)) or model.get("truncated"):
         model["written"] = [
             index for index, value in enumerate(values) if index >= len(old_values) or old_values[index] != value
         ]
@@ -1164,7 +1226,7 @@ def _visualization_for(
     language: str = "cpp",
 ) -> dict[str, Any]:
     if profile.renderer == "grid":
-        return _grid_visualization(scope, step, None, extents, dict(profile.reached_rules))
+        return _grid_visualization(scope, step, None, extents, dict(profile.reached_rules), None, profile.cell_subscripts)
     if profile.renderer == "array":
         return _array_visualization(scope, profile, None, extents)
     if profile.renderer == "graph":
@@ -1216,9 +1278,11 @@ def _grid_visualization(
     extents: dict[str, tuple[int, int]] | None = None,
     reached_rules: dict[str, str] | None = None,
     picks: dict[str, str] | None = None,
+    cell_subscripts: tuple[tuple[str, str, str], ...] = (),
 ) -> dict[str, Any]:
     """`picks` (chosen before Run) names the visited table, the distance table written on
-    the cells and the queue or stack in the frontier; then nothing is guessed by name."""
+    the cells and the queue or stack in the frontier; then nothing is guessed by name.
+    `cell_subscripts` (`a[rr][cc]` in the code) mark the current cell of a drawn grid."""
     if name is None:
         # A character map (the maze, the board) is the grid; tables beside it only mark it.
         grid_name, grid = _character_map(scope)
@@ -1296,14 +1360,18 @@ def _grid_visualization(
     for row, column in walls:
         if row < row_count and column < column_count:
             visited[row][column] = False
-    active, active_names, coordinates = _active_cells(scope, row_count, column_count)
+    # `vis[nx][ny]` marks the cell as much as `a[nx][ny]`: the visited table is drawn on it.
+    drawn = {*names, visited_name}
+    indexed = [(row, column) for grid, row, column in cell_subscripts if grid in drawn]
+    active, active_names, coordinates = _active_cells(scope, row_count, column_count, indexed, guess=picks is None)
     frontier_name, frontier = _frontier_cells(scope, row_count, column_count, None if picks is None else picks.get("frontier", ""))
     queue = scope.get(frontier_name) if frontier_name else None
     return {
         "renderer": "grid",
         "ready": True,
         "name": grid_name,
-        "uses": _unique_names([*names, visited_name, *active_names, frontier_name]),
+        # The queue only boxes cells; its order is in Variables (the user's choice 2026-11-19).
+        "uses": _unique_names([*names, visited_name, *active_names]),
         "rows": rows,
         "walls": [
             {"row": row, "column": column}
@@ -1533,6 +1601,10 @@ def _cells_visualization(
 ) -> dict[str, Any]:
     """A row of cells (Array1D): like the bar view, but for values of any type."""
     value = scope.get(name)
+    text = isinstance(value, str)
+    if text:
+        # A string picked for Array simulation: one bare character per cell.
+        value = list(value)
     if isinstance(value, list) and not value:
         return _empty_sequence("cells", name)
     elif isinstance(value, list):
@@ -1545,7 +1617,7 @@ def _cells_visualization(
         "renderer": "cells",
         "ready": True,
         "name": name,
-        "values": [_display_value(item, language) for item in items],
+        "values": items if text else [_display_value(item, language) for item in items],
         "truncated": isinstance(value, _PartialItems) or length > len(items),
     }
     _mark_partial(visualization, value)
@@ -2112,10 +2184,16 @@ def _active_cells(
     scope: dict[str, Any],
     rows: int,
     columns: int,
+    indexed: Iterable[tuple[str, str]] = (),
+    guess: bool = True,
 ) -> tuple[list[dict[str, Any]], list[str], list[str]]:
     """Cells the code is at (`row, col`, a pair `cur`), the names it read them from, and a
     readout per coordinate pair (`row,col = (0, 1)`), also for one off the grid (`nr = -1`),
-    which keeps the names out of Variables whether or not the cell is on the grid."""
+    which keeps the names out of Variables whether or not the cell is on the grid.
+
+    `indexed` pairs come from the code (`a[rr][cc]`): they mark in the code's order whatever
+    their names, and a name pattern below with the same two names is not used. Without `guess`
+    (an algorithm was picked) they are the only ones."""
     # Code that walks with (c, r) uses c for the row, so nc/nr follow that order.
     new_cell = ("nc", "nr") if "c" in scope and "r" in scope else ("nr", "nc")
     patterns = (
@@ -2128,12 +2206,16 @@ def _active_cells(
         ("wc", "wr", "candidate"),
         ("x", "y", "current"),
     )
+    roles = {frozenset(pattern[:2]): pattern[2] for pattern in patterns}
+    by_code = [(row, column, roles.get(frozenset((row, column)), "current")) for row, column in indexed]
+    taken = {frozenset(pair[:2]) for pair in by_code}
+    patterns = (*by_code, *(pattern for pattern in patterns if guess and frozenset(pattern[:2]) not in taken))
     cells: list[dict[str, Any]] = []
     names: list[str] = []
     readouts: list[str] = []
     seen: set[tuple[int, int, str]] = set()
     # A cell held as a pair: `pii now = q.front();`
-    for name in ("now", "cur", "current", "cell", "top", "front", "u"):
+    for name in ("now", "cur", "current", "cell", "top", "front", "u") if guess else ():
         value = scope.get(name)
         if (
             isinstance(value, list)
@@ -2258,6 +2340,11 @@ def _is_grid(value: Any) -> bool:
         widths = {len(row) for row in value}
         return len(widths) == 1
     return False
+
+
+def _is_char_grid(value: Any) -> bool:
+    """Rows of characters: `vector<string> board`, `char g[N][M]`, `[list(input()) …]`."""
+    return _is_grid(value) and all(isinstance(cell, str) for row in _normalize_grid(_used_rows(value)) for cell in row)
 
 
 def _is_numeric_array(value: Any) -> bool:

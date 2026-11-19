@@ -298,7 +298,7 @@ def test_help_page_and_hover_terms() -> None:
     terms = Path("app/static/terms.js").read_text(encoding="utf-8")
     script = Path("app/static/app.js").read_text(encoding="utf-8")
     # Every legend label the views draw has an explanation.
-    for label in ("Visited", "Frontier", "Current", "Reading", "Written", "New", "Blocked", "Edge being checked", "Returned"):
+    for label in ("Visited", "Frontier", "Current", "Reading", "Changed", "New", "Blocked", "Edge being checked", "Returned"):
         assert f'term: "{label}"' in terms
     assert "item.dataset.term = label" in script and "DebuggerTerms" in script
 
@@ -328,6 +328,8 @@ def test_chooser_slots_are_plain_questions_with_an_opt_out() -> None:
     assert 'new Option("不用", "")' in script and '"可不選"' in script
     # Optional slots are pre-filled only from the backend's likely names.
     assert "state.likely[slot]" in script
+    # An optional slot nothing in the code fits is not shown (Dijkstra has no plain queue).
+    assert "if (optional && !fitting.length) {" in script
 
 
 def test_code_in_the_other_language_switches_the_language_with_an_undo() -> None:

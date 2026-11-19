@@ -167,3 +167,48 @@ int main() {
     result = run_debugger(code, stdin_text="#.#\n...\n", language="cpp")
     items = result["steps"][-1]["globals"]["s"]["items"]
     assert [item.get("value") for item in items[:2]] == ["#.#", "..."]
+
+
+def test_a_grid_marks_the_cell_the_code_subscripts_whatever_the_names() -> None:
+    # User's choice 2026-11-18: `a[rr][cc]` makes rr, cc the current cell, in the code's order.
+    code = "a = [[0, 0, 0], [0, 0, 0]]\nr, c = 9, 9\nfor rr in range(2):\n    for cc in range(3):\n        a[rr][cc] = 1\nr, c = 0, 2\na[r][c] = 5\n"
+    steps = run_debugger(code)["steps"]
+    views = [step["views"]["grid:a"] for step in steps if step["views"].get("grid:a", {}).get("ready")]
+    assert any({"row": 1, "column": 2, "role": "current"} in view["active"] for view in views)
+    assert any("rr,cc = (1, 2)" in view["coordinates"] for view in views)
+    # `c, r` used to mean (row c, column r); the code says a[r][c].
+    last = views[-1]
+    assert {"row": 0, "column": 2, "role": "current"} in last["active"] and "r,c = (0, 2)" in last["coordinates"]
+
+
+@requires_cpp
+def test_the_current_cell_is_the_one_the_line_writes_not_the_next() -> None:
+    # User report 2026-11-19: C++ runs `cc++` before the next stop, so Current was one cell ahead.
+    code = """#include <bits/stdc++.h>
+using namespace std;
+int main() {
+    int H, W, N;
+    cin >> H >> W >> N;
+    vector<vector<int>> a(H, vector<int>(W, 0));
+    for (int k = 0; k < N; k++) {
+        int r, c, t, num;
+        cin >> r >> c >> t >> num;
+        for (int rr = r - t; rr <= r + t; rr++) {
+            for (int cc = c - t; cc <= c + t; cc++) {
+                if (0 <= rr && rr < H && 0 <= cc && cc < W && abs(rr - r) + abs(cc - c) <= t) {
+                    a[rr][cc] += num;
+                }
+            }
+        }
+    }
+}
+"""
+    steps = run_debugger(code, stdin_text="3 3 1\n1 1 1 2\n", language="cpp")["steps"]
+    views = [step["views"]["grid:a"] for step in steps if step["line"] == 13]
+    written = [view["written"][0] for view in views if view.get("written")]
+    assert len(written) == 5
+    for view in views:
+        if view.get("written"):
+            cell = view["written"][0]
+            assert {**cell, "role": "current"} in view["active"]
+            assert f"rr,cc = ({cell['row']}, {cell['column']})" in view["coordinates"]

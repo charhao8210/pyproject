@@ -7,7 +7,7 @@
         {group: "視覺化圖的標記", term: "Frontier", tip: "還在 queue 或 stack 裡、等著被處理的格子。"},
         {group: "視覺化圖的標記", term: "Current", tip: "程式現在所在的格子或節點，例如 node、u、row/col 指到的位置。"},
         {group: "視覺化圖的標記", term: "Reading", tip: "這一步被當作索引的位置，例如 i、j、mid、l、r 指到的那一格。只標在程式真的用這個變數索引的陣列上。3D 表格裡是這一行讀到的格子（黃色虛線框），例如 dp[i - 1][j][k]。"},
-        {group: "視覺化圖的標記", term: "Written", tip: "被這一行寫入、值改變的格子（橘框）。"},
+        {group: "視覺化圖的標記", term: "Changed", tip: "這一行執行後值改變的格子（橘框）。只比較前後兩步的值：寫入一樣的值不會標，erase 讓後面的元素往前移則會標。"},
         {group: "視覺化圖的標記", term: "New", tip: "這一行新加進容器的元素（push、push_back、append），只在這一步標成淺藍色，下一步恢復一般顏色。"},
         {group: "視覺化圖的標記", term: "Linked list", tip: "鏈結串列：有 next 欄位的物件（例如 Node）畫成「值 | •」的方塊，箭頭指向 next。上方的名字是指到這個節點的變數（head、cur），∅ 代表 next 是 None（C++ 是 nullptr）；從最後一個節點繞回前面的線代表有環。很長的串列只畫前 6 個和後 2 個，中間寫「… N …」，但被變數指到的節點一定畫出來。"},
         {group: "視覺化圖的標記", term: "Blocked", tip: "牆壁（# 或 *），不能走。"},
@@ -31,7 +31,7 @@
         {group: "Variables 區", term: "integer", tip: "斜體的 integer / floating / text：找不到這個變數的宣告，所以只顯示值的種類，不猜它是 int 還是 long long。"},
         {group: "Variables 區", term: "Function", tip: "「單一值」卡片右上角的名字：現在所在的函式。lambda 會顯示存放它的變數名稱（例如 dfs）。"},
         // Algorithm chooser before Run
-        {group: "選擇演算法（Run 之前）", term: "Array simulation", tip: "陣列模擬：把選的陣列畫成長條圖，看它每一格怎麼變。"},
+        {group: "選擇演算法（Run 之前）", term: "Array simulation", tip: "陣列模擬：把選的陣列畫成長條圖，看它每一格怎麼變。字元陣列（vector<string>、char a[N][M]）畫成一字一格、旁邊標 index 的格子，# 只是一般字元；一個字串畫成一排字元。"},
         {group: "選擇演算法（Run 之前）", term: "Sorting", tip: "排序：把選的陣列畫成長條圖，看比較與交換。"},
         {group: "選擇演算法（Run 之前）", term: "Stack", tip: "堆疊：直立畫出選的容器，top 在最上面；只畫最上面 10 個。"},
         {group: "選擇演算法（Run 之前）", term: "Queue", tip: "佇列：橫著畫出選的容器，左邊 front 先出、右邊 back 進。"},

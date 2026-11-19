@@ -81,6 +81,63 @@ def test_cpp_slots_are_filled_from_declarations() -> None:
     assert not {"n", "m", "main"} & {name for names in slots.values() for name in names}
 
 
+def test_characters_fill_the_array_slot() -> None:
+    cpp = CPP_DECLARATIONS.replace("int main() {", "string word;\nchar name[20];\nint main() {")
+    assert {"maze", "grid", "word", "name"} <= set(slot_candidates(cpp, "cpp")["array"])
+    py = 's = input()\nt = "abc"\ng = [list(input()) for _ in range(2)]\nboard = ["ab", "cd"]\n'
+    assert {"s", "t", "g", "board"} <= set(slot_candidates(py, "python")["array"])
+
+
+PY_CHARS = """board = ["S0#", "0#E"]
+board[0] = "S1#"
+s = "hey"
+s = s + "!"
+"""
+
+
+def test_array_simulation_draws_characters_one_per_cell() -> None:
+    # Approved 2026-11-18 (mockup char-array.png, option A).
+    grids = _ready(run_debugger(PY_CHARS, choice={"algorithm": "array", "variables": {"array": "board"}}))
+    assert grids and all(view["renderer"] == "grid" and view["plain"] and view["walls"] == [] for view in grids)
+    assert [{"row": 0, "column": 1}] in [view["written"] for view in grids]
+    cells = _ready(run_debugger(PY_CHARS, choice={"algorithm": "array", "variables": {"array": "s"}}))
+    assert cells and all(view["renderer"] == "cells" for view in cells)
+    assert cells[-1]["values"] == ["h", "e", "y", "!"]
+    assert [3] in [view.get("added") for view in cells]
+
+
+PY_BOARD = """board = [[0, 1, 0], [0, 0, 0], [1, 0, 0]]
+visited = [[0] * 3 for _ in range(3)]
+q = [[0, 0]]
+visited[0][0] = 1
+x, y = 0, 0
+board[1][1] = 5
+board[1][2] = 6
+"""
+
+
+def test_a_picked_number_table_is_a_plain_grid_and_nothing_is_guessed_by_name() -> None:
+    # User's choices 2026-11-19: Array simulation draws a 2D number table as a plain grid
+    # (mockup grid-plain.png), and once an algorithm is picked no view guesses visited, the
+    # frontier, or a Current cell from names (`visited`, `q`, `x, y`).
+    steps = run_debugger(PY_BOARD, choice={"algorithm": "array", "variables": {"array": "board"}})["steps"]
+    grids = [view for step in steps for view in (step["visualization"], step["views"].get("grid:board", {})) if view.get("ready")]
+    assert grids and all(view["renderer"] == "grid" for view in grids)
+    assert all(view["plain"] for view in _ready({"steps": steps}))
+    assert any(view["rows"][1][1] == 5 for view in grids)
+    for view in grids:
+        assert not any(cell for row in view["visited"] for cell in row)
+        assert view["frontier"] == [] and view["active"] == [] and view["coordinates"] == []
+    ragged = run_debugger("g = [[1], [0, 2], []]\nx = 1\n", choice={"algorithm": "array", "variables": {"array": "g"}})
+    assert all(view["renderer"] == "cells" for view in _ready(ragged))
+
+
+def test_without_a_pick_the_grid_still_guesses_but_leaves_the_queue_to_variables() -> None:
+    view = run_debugger(PY_BOARD)["steps"][-2]["views"]["grid:board"]
+    assert view["frontier"] == [{"row": 0, "column": 0}] and "q" not in view["uses"]
+    assert "x,y = (0, 0)" in view["coordinates"]
+
+
 def test_broken_code_has_no_candidates() -> None:
     assert slot_candidates("def broken(:\n", "python") == {
         "array": [], "graph": [], "queue": [], "stack": [], "node": [], "distance": [], "visited": [],
@@ -176,6 +233,22 @@ int main() {
     result = run_debugger(code, language="cpp", choice={"algorithm": "array", "variables": {"array": "a"}})
     views = _ready(result)
     assert views and all(view["name"] == "a" for view in views)
+
+
+@requires_cpp
+def test_a_cpp_vector_of_strings_is_drawn_one_character_per_cell() -> None:
+    code = """#include <bits/stdc++.h>
+using namespace std;
+int main() {
+    vector<string> board = {"S0#20", "00#10"};
+    board[1][1] = '2';
+    return 0;
+}
+"""
+    views = _ready(run_debugger(code, language="cpp", choice={"algorithm": "array", "variables": {"array": "board"}}))
+    assert views and all(view["renderer"] == "grid" and view["plain"] and view["walls"] == [] for view in views)
+    assert [{"row": 1, "column": 1}] in [view["written"] for view in views]
+    assert views[-1]["rows"][1] == ["0", "2", "#", "1", "0"]
 
 
 def test_the_page_has_the_chooser() -> None:

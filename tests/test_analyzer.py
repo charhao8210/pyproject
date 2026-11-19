@@ -57,7 +57,8 @@ vis[c][r] = True
 
     last = result["steps"][-1]["visualization"]
     assert last["renderer"] == "grid"
-    assert set(last["uses"]) == {"a", "vis", "stack", "c", "r"}
+    # The stack only boxes cells; its order is checked in Variables (user's choice 2026-11-19).
+    assert set(last["uses"]) == {"a", "vis", "c", "r"}
 
 
 

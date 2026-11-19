@@ -52,7 +52,7 @@
     --radius-panel: 12px;
     --line: 26px;
     --gutter: 52px;
-    --mono: "Atkinson Hyperlegible Mono", "Cascadia Code", Consolas, "Microsoft JhengHei", monospace;
+    --mono: "JetBrains Mono", "Cascadia Code", Consolas, "Microsoft JhengHei", monospace;
     --sans: "Atkinson Hyperlegible Next", "Segoe UI", "Microsoft JhengHei", system-ui, sans-serif;
 }
 
@@ -105,6 +105,15 @@
 html {
     min-height: 100%;
     background: var(--paper);
+}
+
+/* JetBrains Mono joins `==` into one sign and `>=` into ≥; code must read as typed. */
+body,
+textarea,
+input,
+select,
+button {
+    font-variant-ligatures: none;
 }
 
 body {
@@ -1352,6 +1361,11 @@ h2 {
     justify-content: flex-start;
 }
 
+/* The coordinates are read at a glance (mockup grid-plain.png, 2026-11-19). */
+.grid-readouts .algorithm-readout {
+    font-size: 20px;
+}
+
 /* An index (`i = 70`) into the part of a long list that was not read. */
 .beyond-note {
     display: block;
@@ -1415,7 +1429,7 @@ h2 {
     gap: 16px;
 }
 
-/* Written (changed since the previous step) is outlined in orange; reading uses the highlighter. */
+/* Changed (`written`: changed since the previous step) is outlined in orange; reading uses the highlighter. */
 .algorithm-cell.written {
     box-shadow: inset 0 0 0 2px var(--write);
 }
@@ -2750,4 +2764,13 @@ a.button {
 /* A yellow line on the pale yellow card is too faint in the light theme. */
 :root[data-theme="light"] .chooser-card[aria-pressed="true"] .chooser-icon {
     stroke: var(--pencil);
+}
+
+/* Row and column indexes around a grid of characters picked for Array simulation. */
+.grid-index {
+    display: grid;
+    place-items: center;
+    color: var(--pencil-faint);
+    font-family: var(--mono);
+    font-size: 12px;
 }

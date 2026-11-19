@@ -479,7 +479,7 @@ function restoreChoices() {
     ["python", "cpp"].forEach((language) => {
         const choice = saved?.[language];
         if (choice && CHOICE_SLOTS[choice.algorithm] && typeof choice.variables === "object") {
-            state.choices[language] = {algorithm: choice.algorithm, variables: {...choice.variables}};
+            state.choices[language] = {algorithm: choice.algorithm, variables: {...choice.variables}, picked: {...(choice.picked || {})}};
         }
     });
     state.choice = state.choices[state.language];
@@ -531,7 +531,7 @@ function renderChooser() {
 }
 
 function pickAlgorithm(algorithm) {
-    state.choice = {algorithm, variables: {...(state.choice?.variables || {})}};
+    state.choice = {algorithm, variables: {...(state.choice?.variables || {})}, picked: {...(state.choice?.picked || {})}};
     renderChooser();
     saveChoices();
 }
@@ -543,8 +543,16 @@ function renderChooserSlots() {
     const slots = state.choice ? CHOICE_SLOTS[state.choice.algorithm] : [];
     elements.chooserVariables.hidden = !slots.length;
     const taken = new Set();
-    elements.chooserSlots.replaceChildren(...slots.map(({slot, question, hint, optional}) => {
+    elements.chooserSlots.replaceChildren(...slots.flatMap(({slot, question, hint, optional}) => {
         const names = state.candidates[slot] || [];
+        // Any 1D array fits a queue or stack slot; an optional one is shown only when the code
+        // really uses something that way. Dijkstra's priority_queue is not a queue here, and a
+        // select offering only 「不用」 (or `vis`) would just puzzle, so the row is left out.
+        const fitting = optional && (slot === "queue" || slot === "stack") ? state.likely[slot] || [] : names;
+        if (optional && !fitting.length) {
+            state.choice.variables[slot] = "";
+            return [];
+        }
         const options = names.map((name) => new Option(name, name));
         if (optional) options.push(new Option("不用", ""));
         else if (!names.length) options.push(new Option("（這段程式沒有適合的變數）", ""));
@@ -553,13 +561,16 @@ function renderChooserSlots() {
         select.setAttribute("aria-label", question);
         select.append(...options);
         const variables = state.choice.variables;
-        const kept = Object.hasOwn(variables, slot) && options.some((option) => option.value === variables[slot]);
+        // Only a name the user picked is kept; a pre-fill made before the candidates arrived
+        // (「不用」 for want of any) is guessed again.
+        const kept = state.choice.picked?.[slot] && options.some((option) => option.value === variables[slot]);
         const guess = (optional ? state.likely[slot] || [] : names).find((name) => !taken.has(name));
         select.value = kept ? variables[slot] : guess ?? options[options.length - 1].value;
         variables[slot] = select.value;
         if (select.value) taken.add(select.value);
         select.addEventListener("change", () => {
             variables[slot] = select.value;
+            state.choice.picked = {...state.choice.picked, [slot]: true};
             saveChoices();
         });
         const label = textSpan(question, "chooser-slot-question");
@@ -567,7 +578,7 @@ function renderChooserSlots() {
         const row = document.createElement("div");
         row.className = "chooser-slot";
         row.append(label, select, textSpan(hint, "chooser-slot-hint"));
-        return row;
+        return [row];
     }));
     updateRunButtons();
 }
@@ -2063,14 +2074,13 @@ function renderGridAlgorithm(view) {
         ["visited", "Visited", marked(view.visited)],
         ["frontier", "Frontier", marked(view.frontier)],
         ["active", "Current", marked(view.active)],
-        ["written", "Written", marked(view.written)],
+        ["written", "Changed", marked(view.written)],
         ["wall", "Blocked", marked(view.walls)],
     ].filter(([, , shown]) => shown).map(([kind, label]) => [kind, label]);
     meta.append(dimensions);
     if (legend.length) meta.append(algorithmLegend(legend));
-    // The cells the code holds, as numbers, and the queue in the order it will be taken.
-    const details = [...(view.coordinates || [])];
-    if (view.queue && !view.container) details.push(`${view.queue.name}: ${view.queue.entries.join(" ") || "empty"}`);
+    // The cells the code holds, as numbers. The queue's order is in Variables (user's choice).
+    const details = view.coordinates || [];
     if (details.length) {
         const readouts = document.createElement("div");
         readouts.className = "algorithm-readouts grid-readouts";
@@ -2093,9 +2103,12 @@ function renderGridAlgorithm(view) {
     elements.algorithmView.append(meta);
     const area = algorithmViewArea(meta);
     const gap = 3;
+    // Characters picked for Array simulation (`plain`): row and column indexes around the cells.
+    const indexWidth = 22;
+    const reserved = view.plain ? indexWidth + gap : 0;
     const fitted = Math.floor(Math.min(
-        (area.width - gap * (columns - 1)) / Math.max(1, columns),
-        (area.height - gap * (rows.length - 1)) / Math.max(1, rows.length),
+        (area.width - reserved - gap * (columns - 1)) / Math.max(1, columns),
+        (area.height - reserved - gap * (rows.length - 1)) / Math.max(1, rows.length),
     ));
     const cellSize = Math.max(24, Math.min(80, fitted));
 
@@ -2107,14 +2120,19 @@ function renderGridAlgorithm(view) {
     grid.className = "algorithm-grid";
     grid.style.setProperty("--cell", `${cellSize}px`);
     grid.style.setProperty("--cell-font", `${fontSize.toFixed(1)}px`);
-    grid.style.gridTemplateColumns = `repeat(${columns}, ${cellSize}px)`;
+    grid.style.gridTemplateColumns = `${view.plain ? `${indexWidth}px ` : ""}repeat(${columns}, ${cellSize}px)`;
+    if (view.plain) {
+        grid.append(textSpan("", "grid-index"));
+        for (let column = 0; column < columns; column += 1) grid.append(textSpan(String(column), "grid-index"));
+    }
     rows.forEach((row, rowIndex) => {
+        if (view.plain) grid.append(textSpan(String(rowIndex), "grid-index"));
         row.forEach((value, columnIndex) => {
             const key = `${rowIndex}:${columnIndex}`;
             const cell = document.createElement("div");
             cell.className = "algorithm-cell";
             cell.dataset.row = String(rowIndex);
-            if (walls.has(key) || String(value) === "#") cell.classList.add("wall");
+            if (walls.has(key)) cell.classList.add("wall");
             if (visited.has(key)) cell.classList.add("visited");
             if (frontier.has(key)) cell.classList.add("frontier");
             if (active.has(key)) cell.classList.add(active.get(key));
@@ -2290,10 +2308,10 @@ function indexedViewMeta(view, count) {
     });
     const details = document.createElement("div");
     details.className = "algorithm-meta-details";
-    // The legend explains the Reading and Written marks, so it only shows while this step has some.
+    // The legend explains the Reading and Changed marks, so it only shows while this step has some.
     const legend = [];
     if ((view.markers || []).some((marker) => marker.role === "active")) legend.push(["active", "Reading"]);
-    if (view.written?.length) legend.push(["written", "Written"]);
+    if (view.written?.length) legend.push(["written", "Changed"]);
     if (view.added?.length) legend.push(["added", "New"]);
     if (legend.length) details.append(algorithmLegend(legend));
     meta.append(summary, details);
@@ -2387,7 +2405,7 @@ function containerMeta(view, size = `size ${view.size}`) {
     const legend = [];
     if (view.reading?.length) legend.push(["reading", "Reading"]);
     if (view.added?.length) legend.push(["added", "New"]);
-    if (view.written?.length) legend.push(["written", "Written"]);
+    if (view.written?.length) legend.push(["written", "Changed"]);
     if (legend.length) details.append(algorithmLegend(legend));
     meta.append(summary, details);
     return meta;

@@ -38,6 +38,14 @@ def test_std_string_objects_and_char_values_decode_to_text() -> None:
             "main:g",
         )
     ) == ["ab", "cd"]
+    # MinGW GDB 10 prints npos of a string inside a vector as `<optimized out>`.
+    assert _plain(
+        _serialize_cpp_value(
+            "{{static npos = <optimized out>, _M_dataplus = {_M_p = 0x1 \"S0#20\"}}, "
+            "{static npos = <optimized out>, _M_dataplus = {_M_p = 0x2 \"00#10\"}}}",
+            "main:board",
+        )
+    ) == ["S0#20", "00#10"]
 
 
 def test_bit_vectors_and_sparse_tables_expand_to_rows() -> None:
