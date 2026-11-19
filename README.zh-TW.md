@@ -2,20 +2,42 @@
 
 [English](README.md) | 繁體中文
 
-Code Visual Debugger 是一套在本機執行的 Python／C++ 程式視覺化除錯工具。你可以選擇語言、貼上程式碼、輸入測試資料，執行一次後使用上一步／下一步逐步查看程式狀態。
+Code Visual Debugger 是一套在本機執行的 Python／C++17 程式視覺化除錯工具，目標是把「在紙上模擬程式」的過程自動化，適合用小測資教學與練習。
 
-每個執行步驟都會顯示目前程式碼行、重要區域變數、全域變數、物件關係、函式呼叫堆疊、累積輸出，以及例外或執行錯誤。系統也會嘗試辨識陣列、矩陣、圖、遞迴、二分搜尋、排序與動態規劃等常見演算法，切換成適合的視覺化方式。
+貼上程式和測試資料，選擇這個程式在做什麼（例如 BFS），執行一次後就能一步一步看每一行做了什麼：變數怎麼變、陣列／迷宮／圖／Stack／Queue／Linked List 長什麼樣子。
 
 ## 主要功能
 
-- 支援 Python 與 C++17 程式。
-- 使用上一步／下一步瀏覽不可變的執行快照。
-- 顯示區域變數、全域變數、物件身分與函式呼叫堆疊。
-- 顯示截至目前步驟的標準輸出。
-- 支援 `input()`、`sys.stdin.read()` 與 C++ 標準輸入。
-- 視覺化陣列、矩陣、圖、物件參照與遞迴呼叫樹。
-- 發生 RE、TLE 或超過步驟限制時，仍保留停止前已收集的步驟。
-- C++ 模式可解析常見純量、字串、原生陣列與多種 `std::vector` 結構。
+### 執行前：選擇演算法
+
+- 右邊的卡片告訴 Debugger 這個程式在做什麼：Array simulation、Sorting、Stack、Queue、Linked List、BFS、DFS、Shortest path、Recursion，或 Other（讓程式自己猜，可能畫得不好）。
+- 每張卡片用簡單的問題問要畫哪些變數（例如 BFS 問圖、queue、visited、距離），並依程式碼預先填好；選錯可以自己換，用不到的選「不用」。
+- 選了卡片才能 Run；按 Edit code 會回到選擇畫面。
+
+### 視覺化
+
+- **長條圖**：陣列與排序；負數畫在零線下方，`INF` 畫成虛線 `∞`。
+- **一格一格**：字串、字元陣列、長度不一的二維陣列。
+- **格子**：迷宮、字元地圖與二維表格，標出目前格、visited、frontier、牆壁與距離；一般表格附列／欄索引。
+- **圖**：節點可拖曳，樹由上往下排，邊上標權重，正在檢查的邊會亮起；有向／無向可手動切換。BFS／DFS 的 queue／stack 畫在圖或格子上方。
+- **Stack**（直立，top 在上）、**Queue**（左邊出、右邊進）、**Linked List**（`值 | •` 方塊加箭頭，`head ↓ ∅` 代表 None／nullptr）。
+- **遞迴樹**。
+- View 選單可以換畫法或換要畫的變數，不用重新執行（標 `(runs again)` 的會重跑一次）。
+- Reading／Changed／New 標記代表這一行讀到、值改變、新加入的格子。滑鼠停在圖例或標記上會顯示說明，`/help` 頁面有完整使用說明與名詞表。
+
+### 逐步檢視
+
+- 黃色那一行是「接下來要執行的這一行」；圖、變數和 stdout 都是這一行執行完之後的樣子（停在 `vis[v] = true` 時，v 已經打勾）。
+- `變數 ▾` 勾選要看的變數，畫在圖的右邊：所有單一值合成一張卡片，每個陣列或容器各一張，只寫數值。
+- 只讀一次的輸入值（例如 `n`、`m`）固定顯示在圖的上方。
+- 時間軸：滑桿、`←`／`→` 上一步／下一步、`Space` 自動播放（0.25×–2×）、`|‹`／`›|` 跳到目前迴圈的前後。
+- RE 停在出錯的那一行；TLE 或超過步數上限時，停止前的步驟都保留。編譯或語法錯誤會在程式碼裡標紅。
+
+### 編輯器
+
+- 語法上色、行號；貼上另一種語言的程式時會自動切換語言（可按「改回」）。
+- 兩種語言的程式碼和測試資料都存在瀏覽器裡，重新開啟頁面還在。
+- 亮色／暗色主題；每個區塊都能收起，拖曳分隔線可調整大小。
 
 ## 系統需求
 
@@ -76,13 +98,13 @@ python3 --version
 適合已經可以執行 `git --version` 的使用者。在 PowerShell 輸入：
 
 ```powershell
-git clone https://github.com/charhao8210/pyproject.git
+git clone -b mvp https://github.com/charhao8210/pyproject.git
 cd pyproject
 ```
 
 **方法 B：下載 ZIP**
 
-1. 開啟 [GitHub 專案頁面](https://github.com/charhao8210/pyproject)。
+1. 開啟 [GitHub 專案頁面的 mvp 分支](https://github.com/charhao8210/pyproject/tree/mvp)（目前版本在 `mvp` 分支）。
 2. 按綠色 **Code** 按鈕。
 3. 選擇 **Download ZIP**。
 4. 將 ZIP 解壓縮。
@@ -214,7 +236,7 @@ sudo apt install g++ gdb
 接著下載、安裝並啟動專案：
 
 ```bash
-git clone https://github.com/charhao8210/pyproject.git
+git clone -b mvp https://github.com/charhao8210/pyproject.git
 cd pyproject
 python3 -m venv .venv
 .venv/bin/python -m pip install --upgrade pip
@@ -229,7 +251,7 @@ python3 -m venv .venv
 Python 模式的安裝方式：
 
 ```bash
-git clone https://github.com/charhao8210/pyproject.git
+git clone -b mvp https://github.com/charhao8210/pyproject.git
 cd pyproject
 python3 -m venv .venv
 .venv/bin/python -m pip install --upgrade pip
@@ -241,12 +263,12 @@ macOS 內建的 `g++` 通常實際上是 Clang，使用的是 libc++；本專案
 
 ## 使用方式
 
-1. 在右上角選擇 `Python` 或 `C++`。
-2. 將程式貼到程式碼編輯區。
-3. 如果程式會讀取輸入，在 Test data 欄位填入測試資料。
-4. 按下執行按鈕。
-5. 使用上一步／下一步查看每個執行快照。
-6. 從變數、資料結構、Call Stack 與輸出區觀察程式如何變化。
+1. 右上角 Language 選 `Python` 或 `C++`。
+2. 把程式貼進 Source code。
+3. 程式會讀輸入的話，把資料貼進 Test data（stdin）。
+4. 在右邊「這個程式在做什麼？」選一張卡片，確認下方要畫的變數。
+5. 按 `Run as …`（Python 約 1–3 秒，C++ 約 1–30 秒）。
+6. 用 `→`／`←` 或時間軸逐步查看；要改程式或換演算法就按 Edit code。
 
 ## 執行測試
 
@@ -268,56 +290,46 @@ Windows 未啟用虛擬環境時：
 
 除網頁介面外，也可以直接呼叫：
 
-```text
-POST /api/debug
-```
+- `POST /api/candidates`：只看程式碼，列出每張卡片每個欄位可以選的變數（`{"language": "cpp", "code": "..."}`）。
+- `POST /api/debug`：執行程式，回傳每一步的快照。
 
-範例請求：
+`/api/debug` 範例請求：
 
 ```json
 {
   "language": "python",
-  "code": "value = int(input())\nprint(value * 2)",
-  "stdin": "21\n"
+  "code": "a = [3, 1, 2]\na.sort()\nprint(a)",
+  "stdin": "",
+  "choice": {"algorithm": "array", "variables": {"array": "a"}}
 }
 ```
 
-`language` 可使用 `python` 或 `cpp`。回應會包含原始碼、標準輸入、執行狀態、演算法判斷結果，以及按時間排列的 `steps` 快照。
+`language` 可用 `python` 或 `cpp`。`choice` 可省略，省略時由程式自己猜要畫什麼（等同 Other）。回應包含 `status`（`completed`／`exception`／`step_limit`／`timeout`）、`algorithm`（畫法與 View 選單的清單），以及按時間排列的 `steps`：每一步的行號、區域／全域變數、呼叫堆疊、目前為止的輸出、例外，和後端算好的 `visualization`。
 
 ## 運作架構
 
 ```text
 瀏覽器
-  │ POST /api/debug
+  │ POST /api/candidates  選卡片時列出候選變數
+  │ POST /api/debug       執行並取得每一步快照
   ▼
 FastAPI ── 語言分派
   │
-  ├── Python 隔離子行程
-  │      ├── sys.settrace() 收集執行事件
-  │      ├── 序列化變數與物件關係
-  │      └── 產生 JSON 快照
+  ├── Python：AST 檢查 → 隔離子行程（-I -S、暫存目錄）
+  │      └── sys.settrace() 記錄每一步，序列化變數並保留物件身分
   │
-  ├── C++17 編譯與 GDB 逐行追蹤
-  │      ├── 分析宣告與作用域
-  │      ├── 讀取變數及 STL 結構
-  │      └── 對齊標準輸出與執行步驟
+  ├── C++17：g++ -g -O0 編譯 → GDB 逐行追蹤
+  │      ├── 分析原始碼的宣告與作用域，再用 DWARF 確認變數讀得到
+  │      ├── 解析 STL 容器；沒被寫入的值沿用上一步，加快追蹤
+  │      └── 無緩衝 stdout，輸出對齊印出它的那一步
   │
-  ├── 演算法與資料結構辨識
-  │      ├── 矩陣／網格
-  │      ├── 陣列
-  │      ├── 圖
-  │      └── 遞迴
-  │
+  ├── 分析器：依選的演算法（或自動猜測）替每一步算好視覺化資料
+  │      └── 長條、格子、圖、Stack、Queue、Linked List、遞迴樹
   ▼
-Vanilla JavaScript 前端
-  ├── 程式碼行檢視器
-  ├── 變數與資料結構
-  ├── 可拖曳的 SVG 物件關係圖
-  ├── 函式呼叫堆疊
-  └── 標準輸出與 RE／TLE 狀態
+Vanilla JavaScript 前端：程式碼、視覺化、勾選的變數、stdout、時間軸
 ```
 
-瀏覽器只負責呈現後端產生的 JSON 快照，不會自行解讀 Python 執行語意。「上一步」是切換到先前保存的快照，不是讓 Python 反向執行。
+瀏覽器不解讀程式語意，只畫後端算好的 JSON。「上一步」是切換到先前保存的快照，不是讓程式反向執行。
 
 ## 常見問題
 
@@ -360,18 +372,17 @@ python -m uvicorn app.main:app --reload --port 8765
 
 ## 已知限制
 
-- Python 模式只允許受限制的 `sys` 輸入介面，不支援一般 import。
-- 不支援 async、執行緒、多行程、檔案 I/O、網路、GUI、NumPy、pandas 或第三方函式庫。
-- 沒有使用者中斷點、監看運算式、變數修改、`pdb` 整合或控制流程圖。
-- 演算法辨識採用啟發式規則；不熟悉或不明確的程式會回到一般執行畫面。
-- Python 內建的 C 實作，例如 `list.sort()`，不會公開內部比較步驟，因此只能看到排序前後狀態。
-- 單次追蹤最多顯示 5,000 個快照（Python 程式最多可跑 50,000 步，畫面會說明共跑了幾步、怎麼結束）；Python 可以 import `sys`、`collections`（`deque`、`defaultdict`、`Counter`）、`heapq`、`bisect`、`math`；容器、巢狀深度與輸出長度也有上限。
-- C++ 模式依賴 GCC、GDB 與 libstdc++ 內部結構，不支援 MSVC STL 或 libc++ 的容器內部解析。
-- C++ 容器越多、資料越大，每個步驟需要的 GDB 命令就越多，也越容易達到三秒限制。
+- 給小測資用：一次最多顯示 5,000 步。Python 程式最多跑 50,000 步、3 秒（畫面會寫共跑了幾步、怎麼結束）；C++ 最多 30 秒，迴圈裡的每一行最多停 1,000 次，之後照常執行但不再停，畫面會標出是哪幾行。
+- Python 只能 import `sys`（`stdin`、`exit`、`setrecursionlimit`）、`collections`（`deque`、`defaultdict`、`Counter`）、`heapq`、`bisect`、`math`；不能用 `open`、`eval`、`exec`、async、執行緒、檔案 I/O、網路或第三方函式庫。
+- C++ 依賴 GCC、GDB 與 libstdc++ 內部結構，不支援 MSVC STL 或 libc++。可解析 `vector`（含 `vector<bool>`）、`string`、原生陣列、`std::array`、`pair`、`queue`／`stack`／`deque`、`priority_queue`、`set`／`multiset`／`map`／`multimap`（元素是內建型別或 pair）；`unordered_*` 只顯示「contents not decoded」，三維陣列不會讀取。
+- 容器最多讀 50 項、巢狀 4 層，字串 1,000 字元，輸出 100,000 字元。
+- 選 Other 時演算法是從程式碼猜的，可能畫錯；圖的有向／無向也是猜的，可在圖上方的選單改。
+- Python 內建的 C 實作（例如 `list.sort()`）看不到內部比較步驟，只看得到排序前後。
+- 沒有使用者中斷點、監看運算式或修改變數的功能。
 
 ## 安全性提醒
 
-本專案是教學工具，**不是安全沙箱**。使用者程式會在有時間限制的獨立子行程與暫存工作目錄中執行，並受到 AST 檢查、受限 built-ins 與步驟上限保護；這些措施只能降低意外風險，不能當作執行惡意程式碼的安全邊界。請勿把它直接公開部署並用來執行不受信任的程式碼。
+本專案是教學工具，**不是安全沙箱**。Python 程式在有時間限制的隔離子行程與暫存目錄中執行，並受 AST 檢查、受限 built-ins 與步驟上限保護；C++ 程式則是直接編譯後在 GDB 下執行。這些措施只能降低意外風險，請勿公開部署並用來執行不受信任的程式碼。
 
 ## 官方安裝參考
 

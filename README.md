@@ -2,146 +2,133 @@
 
 English | [繁體中文](README.zh-TW.md)
 
-A clean, local web app for exploring how Python and C++ programs execute. Choose a language, paste a program, provide optional standard input, run it once, and browse immutable execution snapshots with forward/backward controls. Each snapshot includes the current source line, important local variables, object identity, call stack, cumulative stdout, and exception details.
+A local web app that automates tracing a program by hand on paper, built for teaching with small test inputs. Paste a Python or C++17 program and its input, pick what the program does (for example BFS), run it once, and step through every line: how the variables change and what the array, maze, graph, stack, queue, or linked list looks like.
 
-The debugger combines generic execution tracing with heuristic algorithm detection. It can switch between grid, draggable graph, array-bar, recursive-call, and generic execution views.
+## Features
+
+### Before Run: pick the algorithm
+
+- Cards on the right tell the debugger what the program does: Array simulation, Sorting, Stack, Queue, Linked List, BFS, DFS, Shortest path, Recursion, or Other (let it guess; the drawing may be poor).
+- Each card asks plain questions about which variables to draw (BFS asks for the graph, queue, visited, and distance) and pre-fills them from the code. Change any pick, or choose 「不用」 (none) for optional ones.
+- Run is disabled until a card is picked; Edit code brings the cards back.
+
+### Views
+
+- **Bars** for arrays and sorting; negative values hang below the zero line, `INF` is a dashed `∞`.
+- **Cells** for strings, char arrays, and ragged 2D lists.
+- **Grid** for mazes, character maps, and 2D tables, with the current cell, visited cells, frontier, walls, and distances; plain tables show row/column indexes.
+- **Graph** with draggable vertices, trees drawn root-down, edge weights, and the edge being checked lit up; directed/undirected can be switched by hand. BFS/DFS draw their queue/stack above the graph or grid.
+- **Stack** (top up), **Queue** (front left, back right), **Linked List** (`value | •` boxes with arrows; `head ↓ ∅` for None/nullptr).
+- **Recursion tree**.
+- The View picker switches the drawing or the drawn variable without re-running (entries marked `(runs again)` re-run once).
+- Reading / Changed / New marks show entries the line reads, entries whose value changed, and entries just added. Hover any legend item or mark for its meaning; `/help` has the full guide and glossary (Traditional Chinese).
+
+### Stepping
+
+- The highlighted line is the one about to run; the view, variables, and stdout show the state after it runs (stopped on `vis[v] = true`, v is already ticked).
+- `變數 ▾` (Variables) picks variables to draw beside the view: all single values on one card, one card per array or container, values only.
+- Input values read once (`n`, `m`) stay above the view.
+- Timeline: slider, `←` / `→` for previous/next, `Space` to autoplay (0.25×–2×), `|‹` / `›|` to jump to before/after the current loop.
+- A runtime error (RE) stops on the failing line; on a timeout (TLE) or the step limit every step before it is kept. Compile and syntax errors are marked in the editor.
+
+### Editor
+
+- Syntax highlighting and line numbers; pasting code of the other language switches the language (with an undo, 改回).
+- Code and test data of both languages are saved in the browser and restored on reload.
+- Light/dark theme; every panel can be hidden and resized by dragging its divider.
+
+## Requirements
+
+- Python 3.11 or newer
+- `g++` and `gdb` on `PATH` for C++ mode (GCC with libstdc++; see the Chinese README for a Windows MSYS2 setup)
+- Windows or Linux; on macOS only Python mode is supported
+
+## Installation
+
+The current version is on the `mvp` branch.
+
+```powershell
+git clone -b mvp https://github.com/charhao8210/pyproject.git
+cd pyproject
+python -m venv .venv
+.venv\Scripts\python.exe -m pip install -r requirements.txt
+```
+
+On macOS / Linux use `python3 -m venv .venv` and `.venv/bin/python` instead.
+
+## Run
+
+```powershell
+.venv\Scripts\python.exe -m uvicorn app.main:app --reload
+```
+
+Then open <http://127.0.0.1:8000>.
+
+1. Choose `Python` or `C++` under Language.
+2. Paste the program into Source code and its input into Test data (stdin).
+3. Pick a card under 「這個程式在做什麼？」 and check the variables below it.
+4. Press `Run as …` (about 1–3 s for Python, 1–30 s for C++).
+5. Step with `→` / `←` or the timeline; press Edit code to change the program or the algorithm.
+
+## Test
+
+```powershell
+.venv\Scripts\python.exe -m pytest -q
+```
+
+C++ tests are skipped automatically when `g++` or `gdb` is not on `PATH`.
+
+## API
+
+- `POST /api/candidates` lists, from the source alone, the variables each card's questions can take (`{"language": "cpp", "code": "..."}`).
+- `POST /api/debug` runs the program and returns every step.
+
+```json
+{
+  "language": "python",
+  "code": "a = [3, 1, 2]\na.sort()\nprint(a)",
+  "stdin": "",
+  "choice": {"algorithm": "array", "variables": {"array": "a"}}
+}
+```
+
+`language` is `python` or `cpp`. `choice` is optional; without it the backend guesses what to draw (like Other). The response carries `status` (`completed`, `exception`, `step_limit`, `timeout`), `algorithm` (the drawing and the View picker's list), and the ordered `steps`: each step's line, locals, globals, call stack, output so far, exception, and the backend-computed `visualization`.
 
 ## Architecture
 
 ```text
 Browser
-  │ POST /api/debug
+  │ POST /api/candidates  list variables for the chosen card
+  │ POST /api/debug       run and get every step
   ▼
 FastAPI ── language dispatcher
   │
-  ├── isolated Python subprocess (-I -S, temporary working directory)
-  │      │
-  │      ├── sys.settrace() for call / line / return / exception
-  │      ├── bounded value serialization with object identity
-  │      └── JSON snapshots
+  ├── Python: AST checks → isolated subprocess (-I -S, temporary directory)
+  │      └── sys.settrace() records every step; values serialized with object identity
   │
-  ├── C++17 compilation and GDB line tracing (temporary working directory)
-  │      ├── lexical declaration analysis + GDB `info scope` (DWARF) checks
-  │      ├── vector, vector<bool>, nested-vector, vector-array, and global extraction
-  │      └── unbuffered stdout so output lines up with the step that printed it
+  ├── C++17: g++ -g -O0 → GDB line tracing
+  │      ├── source analysis of declarations and scopes, checked against DWARF
+  │      ├── STL containers decoded; values no line wrote are reused from the previous step
+  │      └── unbuffered stdout, so output lines up with the step that printed it
   │
-  ├── heuristic algorithm analysis
-  │      ├── grid / matrix renderer
-  │      ├── array renderer
-  │      ├── graph renderer
-  │      └── recursion renderer
-  │
+  ├── analyzer: per-step view models for the chosen algorithm (or a guess)
+  │      └── bars, cells, grid, graph, stack, queue, linked list, recursion tree
   ▼
-Vanilla JavaScript renderer
-  ├── source line viewer
-  ├── variables and data structures
-  ├── draggable SVG object-reference graph
-  ├── call stack
-  └── stdout plus inline RE/TLE status
+Vanilla JavaScript: source, view, picked variables, stdout, timeline
 ```
 
-The browser never interprets Python execution semantics. It only renders the JSON trace and algorithm-specific view models returned by the backend. Step backward is snapshot navigation; Python is not reverse-executed.
+The browser never interprets program semantics; it only draws the JSON the backend computed. Stepping back switches to a saved snapshot; nothing runs in reverse.
 
-## Requirements
+## Limitations
 
-- Python 3.11 or newer
-- `g++` and `gdb` on `PATH` when using C++ mode
-- Windows, macOS, or Linux
+- Built for small inputs: at most 5,000 steps are shown. Python runs up to 50,000 steps and 3 s (the page says how many steps ran and how the run ended); C++ up to 30 s, and a line inside a loop stops at most 1,000 times, after which it runs on without stopping and the page names the skipped lines.
+- Python can import only `sys` (`stdin`, `exit`, `setrecursionlimit`), `collections` (`deque`, `defaultdict`, `Counter`), `heapq`, `bisect`, and `math`; `open`, `eval`, `exec`, async, threads, file I/O, network, and third-party libraries are not available.
+- C++ relies on GCC, GDB, and libstdc++ internals; MSVC's STL and libc++ are not supported. Decoded: `vector` (including `vector<bool>`), `string`, native arrays, `std::array`, `pair`, `queue` / `stack` / `deque`, `priority_queue`, and `set` / `multiset` / `map` / `multimap` of builtin or pair elements. `unordered_*` shows "contents not decoded"; 3D arrays are not read.
+- Containers are read up to 50 items and 4 levels deep, strings up to 1,000 characters, output up to 100,000 characters.
+- With Other the algorithm is guessed from the code and may be drawn wrong; a graph's direction is guessed too and can be changed above the graph.
+- Built-in C implementations such as `list.sort()` hide their comparisons; only the before/after states are shown.
+- No user breakpoints, watch expressions, or variable editing.
 
-## Installation
+## Security
 
-### Windows PowerShell
-
-```powershell
-python -m venv .venv
-.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-pip install -r requirements.txt
-```
-
-If PowerShell blocks the activation script, either adjust the current user's execution policy or run the virtual-environment executables directly:
-
-```powershell
-.venv\Scripts\python.exe -m pip install -r requirements.txt
-```
-
-### macOS / Linux
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-pip install -r requirements.txt
-```
-
-## Run
-
-From the project root:
-
-```powershell
-uvicorn app.main:app --reload
-```
-
-Then open <http://127.0.0.1:8000>. The page starts with a reference-sharing example, ready to run.
-
-Without activating the Windows virtual environment:
-
-```powershell
-.venv\Scripts\uvicorn.exe app.main:app --reload
-```
-
-## Test
-
-```powershell
-pytest -q
-```
-
-The suite covers basic tracing, function calls, recursion, object identity, circular references, exceptions, partial traces on timeout, step limiting, cumulative stdout, forbidden imports, C++ source analysis and GDB value parsing, C++ STL vectors (including `vector<bool>`, parameters, aliases, and scope boundaries), C++ runtime errors, global adjacency arrays, C++ graph/three-sum visualization, frontend contracts, and the API. C++ tests are skipped automatically when `g++` or `gdb` is not on `PATH`.
-
-## API
-
-`POST /api/debug`
-
-```json
-{
-  "language": "python",
-  "code": "value = int(input())\nprint(value * 2)",
-  "stdin": "21\n"
-}
-```
-
-The `language` field accepts `python` or `cpp`. The response contains the original `source`, `stdin`, language, an ordered `steps` array, execution `status`, detected `algorithm`, and an optional top-level `error`. Each step records its event, source location, current-frame locals, filtered user call stack, stdout so far, exception/return data when applicable, and a backend-generated visualization model.
-
-## Supported Python features
-
-- Assignment, arithmetic, conditionals, `for`, and `while`
-- Lists, tuples, dictionaries, sets, and circular/shared references
-- Functions and recursion
-- `input()` and `sys.stdin.read()` using the Test data field
-- `print()` with cumulative stdout snapshots
-- Python exceptions, including uncaught-exception visualization
-- A practical subset of safe built-ins such as `range`, `len`, `sum`, and `sorted`
-- Heuristic detection for grid traversal, DFS/BFS, recursion, sorting, and general array/matrix processing
-- Specialized grid, draggable graph, array-bar, and recursive-call renderers
-- RE, step-limit, and TLE runs preserve the steps collected before execution stopped
-- The Variables panel ranks algorithm-relevant state and suppresses common transient implementation details
-
-## Current limitations
-
-- Imports other than the restricted `sys` input shim are rejected.
-- Async code, threads, and multiprocessing are not supported.
-- File I/O, network access, GUI libraries, NumPy, pandas, and third-party libraries are outside the MVP.
-- There are no user breakpoints, watch expressions, variable editing, `pdb` integration, or control-flow graphs.
-- The Variables panel shows the current frame's locals plus unshadowed globals (tagged `global`). Other active frames appear only in the Call Stack panel.
-- Algorithm detection is heuristic. The confidence and evidence shown in the UI describe the match; unfamiliar or ambiguous programs fall back to the generic execution view.
-- Built-in C implementations such as `list.sort()` do not expose their internal comparisons to `sys.settrace()`, so only their before/after states can be displayed.
-- Object IDs are used internally to preserve identity, but the UI deliberately displays stable labels such as `List #1` instead of memory addresses.
-- A trace shows at most 5,000 snapshots. A Python program may run on for up to 50,000 steps, and the page says how many steps it ran and how it ended. Python can import `sys` (`stdin`, `exit`, `setrecursionlimit`), `collections` (`deque`, `defaultdict`, `Counter`), `heapq`, `bisect` and `math`. Serialized containers are limited to 50 items and four levels of depth. Captured stdout is capped at 100,000 characters.
-- C++ mode uses debug symbols from `g++ -g -O0` and GDB. Scalars, `std::string`, native arrays, `std::vector<T>` (including `vector<bool>`, `vector<pair<...>>`, and `vector<string>`), `vector<vector<T>>`, `vector<T> adj[N]` adjacency arrays, namespace-scope variables, `typedef`/`using`/`#define` vector aliases, function calls, standard input, and stdout are supported. Uncaught C++ exceptions and signals such as `SIGSEGV` are reported as runtime errors on the last traced line.
-- C++ value extraction depends on libstdc++ internals (`_M_impl._M_start` and the `std::vector<bool>` bit-iterator layout). libc++ or MSVC's STL would need another adapter. `deque`, `queue`, `stack`, `map`, `set`, and similar containers are shown as undecoded "STL container" values.
-- C++ vectors and tables are clipped to 50 items; nested vectors and `adj[N]` arrays to 30 rows × 40 columns. Local native arrays larger than GDB's 64 KiB `max-value-size` are hidden, while large global arrays are sliced.
-- Each extracted C++ container costs extra GDB commands at every step, so traces with many large containers reach the three-second limit sooner. The partial trace is still returned.
-
-## Security limitations
-
-This project is a teaching tool, **not a secure sandbox**. User code runs in a separate isolated-mode Python subprocess with a three-second timeout, a temporary working directory, a restricted built-in set, a stdin-only `sys` shim, AST checks, and a trace-step limit. These controls reduce accidental damage but are not a hardened security boundary and must not be used to execute untrusted hostile code on a public server.
+This is a teaching tool, **not a secure sandbox**. Python code runs in an isolated subprocess with a time limit, a temporary directory, AST checks, restricted built-ins, and a step limit; C++ code is compiled and run natively under GDB. These reduce accidental damage only. Do not deploy it publicly to run untrusted code.
